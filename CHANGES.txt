@@ -1,0 +1,25 @@
+CHANGES LOG
+
+pypStag
+=======
+
+
+-----------------
+commit 07/01/2020
+	stagData:
+		add SphericalCloudData
+		re-build CartesianSliceData to integer the idea of slicing axis and layer for cart3D geometry
+		now efficient and complete dim reduction pb for cart3D and cart2D geom
+	stagVTK:
+		change stag2VTU: now have return mod
+		build stagCloud2timeVTU and all dependencies: __write_time_H5 and __write_time_xdmf
+	stagError:
+		refresh pypStagErrors
+	stagViewer:
+		re-built sliceMap
+
+
+-----------------
+commit 06/01/2020
+	General commit, packaging pypStag
+
