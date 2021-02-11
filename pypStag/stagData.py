@@ -426,6 +426,12 @@ class StagYinYangGeometry(MainStagObject):
         self.x2 = []        #Yang grid x matrix
         self.y2 = []        #Yang grid y matrix
         self.z2 = []        #Yang grid z matrix
+        self.r1     = []    #Matrice of spherical coordinates r for the Yin grid
+        self.theta1 = []    #Matrice of spherical coordinates theta for the Yin grid
+        self.phi1   = []    #Matrice of spherical coordinates phi for the Yin grid
+        self.r2     = []    #Matrice of spherical coordinates r for the Yang grid
+        self.theta2 = []    #Matrice of spherical coordinates theta for the Yang grid
+        self.phi2   = []    #Matrice of spherical coordinates phi for the Yang grid
         self.redFlags = []  #Matrix of wrong index in YY (overlaping pbs)
         self.x1_redf = []   #Matrix of redflag x-coordinates for Yin grid
         self.y1_redf = []   #Matrix of redflag y-coordinates for Yin grid
@@ -492,61 +498,50 @@ class StagYinYangGeometry(MainStagObject):
         #self.XYZind is built during the construction of the YY grid and follows
         #the good index for the field read here (= readFlag in index)
 
-        #Function for 3D psherical YY grids
+        #Functions for the 3D spherical YY grids
         def rectangular2YY(x,y,z,rcmb):
-            """Returns YY geometry for the two blocks in cartesian coordinates
-            Yin grid (x1,y1,z1), Yang grid (x2,y2,z2) from a single rectangular
-            grid."""
-            if isinstance(x,np.ndarray) and isinstance(y,np.ndarray) and isinstance(z,np.ndarray):
-                #Spherical coordinates:
-                R = z+rcmb
-                lat = np.pi/4 - x
-                lon = y - 3*np.pi/4
-                #Yin grid
-                x1 = np.multiply(np.multiply(R,np.cos(lat)),np.cos(lon))
-                y1 = np.multiply(np.multiply(R,np.cos(lat)),np.sin(lon))
-                z1 = np.multiply(R,np.sin(lat))
-                #Yang grid
-                x2 = -x1
-                y2 = z1
-                z2 = y1
-                return ((x1,y1,z1),(x2,y2,z2))
-            else:
-                print('TypeError: Error found in types of inputs!')
-                print('Error number: 100')
-                return ''
+            """Returns the geometry of the two cartesian blocks corresponding
+            to the overlapping Yin (x1,y1,z1) and Yang (x2,y2,z2) grids
+            from the single block contained in the StagYY binary outputs.
+            after bending cartesian boxes"""
+            #Spherical coordinates:
+            R = z+rcmb
+            lat = np.pi/4 - x
+            lon = y - 3*np.pi/4
+            #Yin grid
+            x1 = np.multiply(np.multiply(R,np.cos(lat)),np.cos(lon))
+            y1 = np.multiply(np.multiply(R,np.cos(lat)),np.sin(lon))
+            z1 = np.multiply(R,np.sin(lat))
+            #Yang grid
+            x2 = -x1
+            y2 = z1
+            z2 = y1
+            return ((x1,y1,z1),(x2,y2,z2))
         
         def cartesian2spherical(x1,y1,z1,x2,y2,z2):
             """Converts cartesian coordinates of YY grid into spherical coordinates"""
-            #Type converting
-            x1 = np.array(x1)
-            y1 = np.array(y1)
-            z1 = np.array(z1)
-            x2 = np.array(x2)
-            y2 = np.array(y2)
-            z2 = np.array(z2)
             #Yin grid
-            r1 = np.sqrt(x1**2+y1**2+z1**2)
+            r1     = np.sqrt(x1**2+y1**2+z1**2)
             theta1 = np.arctan2(np.sqrt(x1**2+y1**2),z1)
-            phi1 = np.arctan2(y1,x1)
+            phi1   = np.arctan2(y1,x1)
             #Yang grid
-            r2 = np.sqrt(x2**2+y2**2+z2**2)
+            r2     = np.sqrt(x2**2+y2**2+z2**2)
             theta2 = np.arctan2(np.sqrt(x2**2+y2**2),z2)
-            phi2 = np.arctan2(y2,x2)
+            phi2   = np.arctan2(y2,x2)
             return ((r1,theta1,phi1),(r2,theta2,phi2))
         
         #Creation of Yin-Yang grids:
         self.im('      - Creation of the Yin-Yang grids')
         ((self.x1_overlap,self.y1_overlap,self.z1_overlap),(self.x2_overlap,self.y2_overlap,self.z2_overlap)) = \
             rectangular2YY(self.X,self.Y,self.Z,self.rcmb)
-        ((self.r1,theta1,phi1),(self.r2,theta2,phi2)) = \
+        ((self.r1,self.theta1,self.phi1),(self.r2,self.theta2,self.phi2)) = \
             cartesian2spherical(self.x1_overlap,self.y1_overlap,self.z1_overlap,self.x2_overlap,self.y2_overlap,self.z2_overlap)
 
         ##Cut off the corners from grid #1, which seems to do #2:
         ##Build Redflags on wrong coordinates
-        theta12 = np.arccos(np.multiply(np.sin(theta1),np.sin(phi1)))
-        self.redFlags = np.where(np.logical_or(np.logical_and((theta12>np.pi/4),(phi1>np.pi/2)),\
-                                                np.logical_and((theta12<3*np.pi/4),(phi1<-np.pi/2))))[0]
+        theta12 = np.arccos(np.multiply(np.sin(self.theta1),np.sin(self.phi1)))
+        self.redFlags = np.where(np.logical_or(np.logical_and((theta12>np.pi/4),(self.phi1>np.pi/2)),\
+                                                np.logical_and((theta12<3*np.pi/4),(self.phi1<-np.pi/2))))[0]
 
         if build_redflag_point == True:
             print('      - Building RedFlags Points...')
@@ -573,6 +568,10 @@ class StagYinYangGeometry(MainStagObject):
         self.z2     = self.z2_overlap[goodIndex]
         self.r1     = self.r1[goodIndex]
         self.r2     = self.r2[goodIndex]
+        self.theta1 = self.theta1[goodIndex]
+        self.theta2 = self.theta2[goodIndex]
+        self.phi1   = self.phi1[goodIndex]
+        self.phi2   = self.phi2[goodIndex]
         self.layers = self.layers[goodIndex]
         self.layers = self.layers.astype(np.int)
         
@@ -737,7 +736,7 @@ class StagYinYangGeometry(MainStagObject):
 
 
 
-
+    
 
 
 class StagSphericalGeometry(MainStagObject):
@@ -749,12 +748,15 @@ class StagSphericalGeometry(MainStagObject):
         super().__init__()  # inherit all the methods and properties from MainStagObject
         self.geometry = geometry
         # ----- Cartesian 2D and 3D geometries ----- #
-        self.x  = []        #Matrix of X coordinates meshed (in spherical)
-        self.y  = []        #Matrix of Y coordinates meshed (in spherical)
-        self.z  = []        #Matrix of Z coordinates meshed (in spherical)
-        self.xc = []        #Matrice of cartesian x coordinates (un-projected)
-        self.yc = []        #Matrice of cartesian y coordinates (un-projected)
-        self.zc = []        #Matrice of cartesian z coordinates (un-projected)
+        self.x  = []        #Matrix of X coordinates meshed (in spherical shape)
+        self.y  = []        #Matrix of Y coordinates meshed (in spherical shape)
+        self.z  = []        #Matrix of Z coordinates meshed (in spherical shape)
+        self.xc = []        #Matrice of cartesian x coordinates (in cartesian shape)
+        self.yc = []        #Matrice of cartesian y coordinates (in cartesian shape)
+        self.zc = []        #Matrice of cartesian z coordinates (in cartesian shape)
+        self.r     = []     #Matrice of spherical coordinates r
+        self.theta = []     #Matrice of spherical coordinates theta
+        self.phi   = []     #Matrice of spherical coordinates phi
         self.v  = []        #Matrix of scalar field (or norm of vectorial)
         self.vx = []        #Matrix of x-component of the vectorial field for Cartesian grids
         self.vy = []        #Matrix of y-component of the vectorial field for Cartesian grids
@@ -775,10 +777,7 @@ class StagSphericalGeometry(MainStagObject):
         """
         self.im('Processing stag Data:')
         self.im('  - Grid Geometry')
-        if self.geometry == 'cart2D':
-            self.im('      - 2D cartesian grid geometry')
-        else:
-            self.im('      - 3D cartesian grid geometry')
+        self.im('      - 3D cartesian grid geometry')
         (self.x,self.y,self.z) = np.meshgrid(self.x_coords,self.y_coords,self.z_coords,indexing='ij')
         #save cartesian grid geometry
         self.xc = self.x
@@ -795,28 +794,32 @@ class StagSphericalGeometry(MainStagObject):
         goodIndex = goodIndex[np.array(self.XYZind,dtype=bool)]
 
         #Function for 3D psherical YY grids
-        def rectangular2YY(x,y,z,rcmb):
-            """Returns YY geometry for the two blocks in cartesian coordinates
-            Yin grid (x1,y1,z1), Yang grid (x2,y2,z2) from a single rectangular
-            grid."""
-            if isinstance(x,np.ndarray) and isinstance(y,np.ndarray) and isinstance(z,np.ndarray):
-                #Spherical coordinates:
-                R = z+rcmb
-                lat = np.pi/4 - x
-                lon = y - 3*np.pi/4
-                #Spherical grid
-                x = np.multiply(np.multiply(R,np.cos(lat)),np.cos(lon))
-                y = np.multiply(np.multiply(R,np.cos(lat)),np.sin(lon))
-                z = np.multiply(R,np.sin(lat))
-                return (x,y,z)
-            else:
-                print('TypeError: Error found in types of inputs!')
-                print('Error number: 100')
-                return ''
+        def rectangular2Spherical(x,y,z,rcmb):
+            """Returns the geometry of the spherical grid
+            after bending the cartesian box"""
+            #Spherical coordinates:
+            R = z+rcmb
+            lat = np.pi/4 - x
+            lon = y - 3*np.pi/4
+            #Spherical grid
+            x = np.multiply(np.multiply(R,np.cos(lat)),np.cos(lon))
+            y = np.multiply(np.multiply(R,np.cos(lat)),np.sin(lon))
+            z = np.multiply(R,np.sin(lat))
+            return (x,y,z)
+        
+        def cartesian2spherical(x,y,z):
+            """Converts cartesian coordinates into spherical coordinates"""
+            r     = np.sqrt(x**2+y**2+z**2)
+            theta = np.arctan2(np.sqrt(x**2+y**2),z)
+            phi   = np.arctan2(y,x)
+            return (r,theta,phi)
         
         #Creation of Yin-Yang grids:
         self.im('      - Creation of the spherical grids')
-        (self.x,self.y,self.z) = rectangular2YY(self.x,self.y,self.z,self.rcmb)
+        (self.x,self.y,self.z) = rectangular2Spherical(self.x,self.y,self.z,self.rcmb)
+
+        (self.r,self.theta,self.phi) = cartesian2spherical(self.x,self.y,self.z)
+            #=============================================================
 
         #Processing of the field according to its scalar or vectorial nature:
         if self.fieldNature == 'Scalar':
