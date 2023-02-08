@@ -200,10 +200,10 @@ def cart2VTU(fname,x,y,z,v,Nx,Ny,Nz,fieldName,path='./',ASCII=True,verbose=True)
 
 
 
-def stag2VTU(fname,stagData,path='./',ASCII=False,verbose=True,return_only=False):
+def stag2VTU(fname,stagData,path='./',ASCII=False,verbose=True,return_only=False,creat_pointID=False):
     """ -- Geometry Adaptative Toolkit transforming stagData into VTU --
     This function creats readable file for Paraview for an efficient 
-    3D visualization of data contain in an input stagData instance.
+    3D visualization of data contained in an input stagData instance.
     This function works directly on a stagData input object and adapts the
     constuction of the triangulation according to this geometry. Furthermore
     stag2VTU is able to deal with vectorial and scalar fields. Outputs can be
@@ -241,6 +241,13 @@ def stag2VTU(fname,stagData,path='./',ASCII=False,verbose=True,return_only=False
                         If False, generate meshed file for paraview, call
                         __writeVTKStag()
                         [Default, return_only=False]
+          creat_pointID = bool, if True then creat the list of points ID sorted as
+                          it is in the field stagData.x (Yin and Yang together).
+                          This field will then transfert to the writing function and
+                          the .h5/.xdmf will have an extra field corresponding to 
+                          these points ID (e.g. very usefull if post processing with TTK)
+                          WARNING: This option is only available if ASCII = False
+                                   (ie .h5/.xdmf output)
     """
     pName = 'stag2VTU'
     im('pypStag Visualization ToolKit',pName,verbose)
@@ -484,6 +491,20 @@ def stag2VTU(fname,stagData,path='./',ASCII=False,verbose=True,return_only=False
             vstackp[0:NxNy*Nz]         = V_yinp.reshape((NxNy*Nz), order='F')
             vstackp[NxNy*Nz:2*NxNy*Nz] = V_yangp.reshape((NxNy*Nz),order='F')
             vstack = (vstackx,vstacky,vstackz,vstackr,vstacktheta,vstackphi,vstackp)
+    # ===================
+    if creat_pointID:
+        im('      - Creat pointID',pName,verbose)
+        if stagData.geometry == 'yy':
+            IDyin   = np.array(range(NxNy*Nz),dtype=np.int32).reshape(NxNy,Nz)
+            IDyang  = np.array(range(NxNy*Nz,2*NxNy*Nz),dtype=np.int32).reshape(NxNy,Nz)
+            pointID = np.zeros(2*NxNy*Nz)
+            pointID[0:NxNy*Nz]         = IDyin.reshape((NxNy*Nz), order='F')
+            pointID[NxNy*Nz:2*NxNy*Nz] = IDyang.reshape((NxNy*Nz),order='F')
+        else:
+            pointID = np.array(range(NxNy*Nz),dtype=np.int32).reshape(NxNy*Nz, order='F')        
+            pointID = pointID.reshape((NxNy*Nz), order='F')
+    else:
+        pointID = None
     # =========================================================================
     if not return_only:
         # Exportation under VTKUnstructuredGrid format
@@ -491,7 +512,7 @@ def stag2VTU(fname,stagData,path='./',ASCII=False,verbose=True,return_only=False
             im('    - Writing under .vtu format',pName,verbose)
         else:
             im('    - Writing under .xdmf + .h5 formats',pName,verbose)
-        __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=ASCII,path=path)
+        __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=ASCII,path=path,pointID=pointID)
         im('Exportation done!',pName,verbose)
         if ASCII:
             im('File: '+fname+'.vtu',pName,verbose)
@@ -501,13 +522,13 @@ def stag2VTU(fname,stagData,path='./',ASCII=False,verbose=True,return_only=False
             im('Path : '+path,pName,verbose)
     else:
         # Return all grid/mesh elements
-        return Points,ElementNumbers,vstack
+        return Points,ElementNumbers,vstack,pointID
 
 
 
 
 
-def __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=True,path='./'):
+def __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=False,path='./',pointID=None):
     """ This function creats and exports trianguled geometry and field(s) into
     a .vtu/.h5 file under the name fname. This function was built to be used by
     stag2VTU() and stag2VTU_For_overlapping() functions.
@@ -529,6 +550,12 @@ def __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=True,path='
                   [Default, ASCII=False]
           path = str, path where you want to export your new .vtu file.
                  [Default: path='./']
+          pointID = np.ndarray (or None), contains the list of points ID sorted as
+                    it is in the field stagData.x (Yin and Yang together). If pointID != None,
+                    then, the .h5/.xdmf will have an extra field corresponding to 
+                    these points ID (e.g. very usefull if post processing with TTK)
+                    WARNING: This option is only available if ASCII = False
+                             (ie .h5/.xdmf output)
     """
     # If ASCII then, write an unique file for paraview: ASCII .vtu file
     if ASCII:
@@ -719,6 +746,15 @@ def __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=True,path='
             fid.write('            '+fname_h5+':/Data3\n')
             fid.write('        </DataItem>\n')
             fid.write('    </Attribute>\n\n')
+        # =======================================
+        # PointID
+        if pointID is not None:
+            fid.write('    <Attribute AttributeType="Scalar" Center="Node" Name="PointID">\n')
+            fid.write('        <DataItem DataType="Int" Dimensions="%s" Format="HDF" Precision="8">\n'%\
+                    pointID.shape[0])
+            fid.write('            '+fname_h5+':/pointID\n')
+            fid.write('        </DataItem>\n')
+            fid.write('    </Attribute>\n\n')
 
         # =======================================
         # Ending
@@ -751,14 +787,16 @@ def __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=True,path='
                 dset = fid.create_dataset("Data2", data=Data, dtype=np.float32)
             Data = Datap
             dset = fid.create_dataset("Data3", data=Data, dtype=np.float32)
+        if pointID is not None:
+            dset = fid.create_dataset("pointID", data=pointID, dtype=np.int32)
         fid.close()
         
 
 
 
 
-def stagCloud2timeVTU(fname,stagCloudData,multifile=True,timepar=1,path='./',\
-                      verbose=True,extended_verbose=False):
+def stagCloud2timeVTU(fname,stagCloudData,multifile=True,timeAsF=False,timepar=1,path='./',\
+                      creat_pointID=False,verbose=True,extended_verbose=False):
     """ -- Geometry Adaptative Toolkit transforming stagCloudData into VTU --
     This function creats readable file for Paraview for an efficient 
     3D visualization of data contain in an input stagCloudData instance.
@@ -788,6 +826,14 @@ def stagCloud2timeVTU(fname,stagCloudData,multifile=True,timepar=1,path='./',\
                       split in 1 .xdmf file + as many .h5 files as iterations
                       possible for the input stagCloudData, else all data will
                       be stored in a uniq .h5 file
+          timeAsF   = bool, [only if multifile is False] is timeAsF is True then,
+                      the time will not be implemented as time for VTK files
+                      but will appears as a fields. Put another way, to navigate on
+                      time on paraview, you will change the display field and not the
+                      the time value (that will be unique).
+                      if timeAsF is False, you will ends up with a classical time VTK
+                      where you can press 'play' to see the evolution of your
+                      fields through time.
           timepar = int, define your option for the time of each field:
                             timepar = 0    -> time in the .xdmf will be the file
                                               index of the stagCloudData
@@ -796,6 +842,11 @@ def stagCloud2timeVTU(fname,stagCloudData,multifile=True,timepar=1,path='./',\
                             timepar = 2    -> time in the .xdmf will be the internal
                                               simulation steps (.ti_step)
                     [Default, timepar=1]
+          creat_pointID = bool, if True then creat the list of points ID sorted as
+                          it is in the field stagData.x (Yin and Yang together).
+                          This field will then transfert to the writing function and
+                          the .h5/.xdmf will have an extra field corresponding to 
+                          these points ID (e.g. very usefull if post processing with TTK)
           verbose = bool, if True, then generate a verbose output
                     [Default, verbose=True]
           extended_verbose = bool, if True, then generate an extended verbose output
@@ -814,8 +865,10 @@ def stagCloud2timeVTU(fname,stagCloudData,multifile=True,timepar=1,path='./',\
     #--------------
     fname_vtk = fname+'.xdmf'
     if multifile:
-        im("Export mesh data in several files",pName,verbose)
-        im("Iteration on the cloud:",pName,verbose)
+        if timeAsF:
+            im("Non fatal WARNING: you ask for the option 'timeAsF', however, this function is not compatible with the multifile=True condition.\nSee the documentation for more details",pName,verbose)
+            im("Export mesh data in several files",pName,verbose)
+            im("Iteration on the cloud:",pName,verbose)
         for i in stagCloudData.indices:
             stagCloudData.iterate()
             ifname = stagCloudData.drop.fname
@@ -830,7 +883,7 @@ def stagCloud2timeVTU(fname,stagCloudData,multifile=True,timepar=1,path='./',\
             fname_h5 = ifname+'.h5'
             if i == stagCloudData.indices[0]:
                 fname_h5_geom = fname_h5
-            Points,ElementNumbers,vstack = stag2VTU(ifname,stagCloudData.drop,verbose=extended_verbose,return_only=True)
+            Points,ElementNumbers,vstack,pointID = stag2VTU(ifname,stagCloudData.drop,verbose=extended_verbose,return_only=True,creat_pointID=creat_pointID)
             # ----------
             if i == stagCloudData.indices[0]:
                 step = 'init'
@@ -839,9 +892,10 @@ def stagCloud2timeVTU(fname,stagCloudData,multifile=True,timepar=1,path='./',\
             else:
                 step = 'add'
             # ----------
-            __write_time_H5(step,fname_h5,stagCloudData.drop,Points,ElementNumbers,vstack,path=path)
+            __write_time_H5(step,fname_h5,stagCloudData.drop,Points,ElementNumbers,vstack,path=path,pointID=pointID)
             __write_time_xdmf(step,fname_vtk,fname_h5_geom,fname_h5,stagCloudData.drop,Points.shape[0],Points.shape[1],\
-                        ElementNumbers.shape[0],ElementNumbers.shape[1],vstack,path=path,timex=timex)
+                        ElementNumbers.shape[0],ElementNumbers.shape[1],vstack,path=path,timex=timex,pointID=pointID,\
+                        timeAsF=timeAsF)
     
     else:
         im("Export mesh data in a unique file",pName,verbose)
@@ -859,7 +913,7 @@ def stagCloud2timeVTU(fname,stagCloudData,multifile=True,timepar=1,path='./',\
             elif timepar == 2:
                 timex = stagCloudData.drop.ti_step
             # ----------
-            Points,ElementNumbers,vstack = stag2VTU(ifname,stagCloudData.drop,verbose=extended_verbose,return_only=True)
+            Points,ElementNumbers,vstack,pointID = stag2VTU(ifname,stagCloudData.drop,verbose=extended_verbose,return_only=True,creat_pointID=creat_pointID)
             # ----------
             if i == stagCloudData.indices[0]:
                 step = 'init'
@@ -868,9 +922,177 @@ def stagCloud2timeVTU(fname,stagCloudData,multifile=True,timepar=1,path='./',\
             else:
                 step = 'add'
             # ----------
-            __write_time_H5(step,fname_h5,stagCloudData.drop,Points,ElementNumbers,vstack,path=path,multifile=multifile,field_preposition=ifname)
+            __write_time_H5(step,fname_h5,stagCloudData.drop,Points,ElementNumbers,vstack,path=path,multifile=multifile,field_preposition=ifname,pointID=pointID)
             __write_time_xdmf(step,fname_vtk,fname_h5_geom,fname_h5,stagCloudData.drop,Points.shape[0],Points.shape[1],\
-                        ElementNumbers.shape[0],ElementNumbers.shape[1],vstack,path=path,multifile=multifile,timex=timex,field_preposition=ifname)
+                        ElementNumbers.shape[0],ElementNumbers.shape[1],vstack,path=path,multifile=multifile,timex=timex,field_preposition=ifname,pointID=pointID,\
+                        timeAsF=timeAsF)
+    # --- ending
+    im("Creation of time VTU: done!",pName,verbose)
+    im("File log:",pName,verbose)
+    im("    - .xdmf file:\t"+path+fname_vtk,pName,verbose)
+    if multifile:
+        im("    - .h5 files:",pName,verbose)
+        im("       -> "+str(len(stagCloudData.indices))+' files',pName,verbose)
+        im("       -> stored in: "+path,pName,verbose)
+    else:
+        im("    - .h5 file:\t"+path+fname_h5,pName,verbose)
+
+
+
+
+
+
+
+
+def stagCloud2timeVTU_TTK(fname,stagCloudData,cloudPlateGather,multifile=True,field='topo',timeAsF=False,timepar=1,path='./',\
+                      creat_pointID=False,verbose=True,extended_verbose=False):
+    """ -- Geometry Adaptative Toolkit transforming stagCloudData into VTU --
+    This function creats readable file for Paraview for an efficient 
+    3D visualization of data contain in an input stagCloudData instance.
+    This function works directly on a stagCloudData input object and adapts the
+    constuction of the triangulation according to this geometry and iterate
+    automatically in the cloud. Due to large quantities of data created, outputs
+    are necessarily written under the coupled .h5 and .xdmf format (more efficient)
+    The 'multifile' option of this function allow you to split data in as many .h5
+    files as iterations possible for the input stagCloudData.
+    Note that in order to save space, all grid information are not repeated in .h5
+    files exported. Thus, if you decide to activate the multifile option, the first
+    .h5 generated will be bigger than the one generated after (have a look on the
+    .xfmd file, it is explicitelly explained inside).
+    Concerning geometies:
+      - 'yy' deal with non overlapping stagData object so with stagData.x1,
+        stagData.x2, stagData.y1 ... fields
+      - 'cart3D', read stagData.x, .y, .z and .v fields for a scalar field as
+        example
+      - 'spherical' deal with the spherical grid so stagData.x, .y, .z fields
+        and ignore .xc, .yc and .zc fields.
+    Triangulation are computed using the function stag2VTU.
+
+    <i> : fname = str, name of the exported file without any extention
+          stagCloudData = stagCloudData object, stagCloudData object that will
+                          be transform into meshed file
+          multifile = bool, if multifile is True then, data generated will
+                      split in 1 .xdmf file + as many .h5 files as iterations
+                      possible for the input stagCloudData, else all data will
+                      be stored in a uniq .h5 file
+          timeAsF   = bool, [only if multifile is False] is timeAsF is True then,
+                      the time will not be implemented as time for VTK files
+                      but will appears as a fields. Put another way, to navigate on
+                      time on paraview, you will change the display field and not the
+                      the time value (that will be unique).
+                      if timeAsF is False, you will ends up with a classical time VTK
+                      where you can press 'play' to see the evolution of your
+                      fields through time.
+          timepar = int, define your option for the time of each field:
+                            timepar = 0    -> time in the .xdmf will be the file
+                                              index of the stagCloudData
+                            timepar = 1    -> time in the .xdmf will be the internal
+                                              (adim) simulation ages (.simuAge)
+                            timepar = 2    -> time in the .xdmf will be the internal
+                                              simulation steps (.ti_step)
+                    [Default, timepar=1]
+          creat_pointID = bool, if True then creat the list of points ID sorted as
+                          it is in the field stagData.x (Yin and Yang together).
+                          This field will then transfert to the writing function and
+                          the .h5/.xdmf will have an extra field corresponding to 
+                          these points ID (e.g. very usefull if post processing with TTK)
+          verbose = bool, if True, then generate a verbose output
+                    [Default, verbose=True]
+          extended_verbose = bool, if True, then generate an extended verbose output
+                    conditioning the verbose output of subfunction called by
+                    stagCloud2timeVTU
+                    [Default, verbose=True]
+    """
+    pName = 'stagCloud2timeVTU'
+    im("Creation of a time VTU from a stagCloudData",pName,verbose)
+    # test the geometry of clouddata: have to be 3D 
+    if stagCloudData.geometry not in ['cart3D','spherical','yy']:
+        raise VisuGridGeometryError(stagCloudData.geometry,"'cart3D' or 'spherical' or 'yy'")
+    #--------------
+    if path[-1] != '/':
+        path += '/'
+    #--------------
+    fname_vtk = fname+'.xdmf'
+    if multifile:
+        if timeAsF:
+            im("Non fatal WARNING: you ask for the option 'timeAsF', however, this function is not compatible with the multifile=True condition.\nSee the documentation for more details",pName,verbose)
+            im("Export mesh data in several files",pName,verbose)
+            im("Iteration on the cloud:",pName,verbose)
+        for i in stagCloudData.indices:
+            stagCloudData.iterate()
+            print()
+            cloudPlateGather.iterate()
+            if field == 'topo':
+                cloudPlateGather.drop.topologicalSimplification()
+                sd = cloudPlateGather.drop.export_topo(stagCloudData.drop)
+            elif field == 'magGSV':
+                sd = cloudPlateGather.drop.export_magGSV(stagCloudData.drop)
+            print()
+            
+            ifname = stagCloudData.drop.fname
+            im("    Current cloud drop: "+ifname,pName,verbose)
+            if timepar == 0:
+                timex = stagCloudData.indices[stagCloudData.ci]
+            elif timepar == 1:
+                timex = stagCloudData.drop.simuAge
+            elif timepar == 2:
+                timex = stagCloudData.drop.ti_step
+            # ----------
+            fname_h5 = ifname+'.h5'
+            if i == stagCloudData.indices[0]:
+                fname_h5_geom = fname_h5
+            Points,ElementNumbers,vstack,pointID = stag2VTU(ifname,stagCloudData.drop,verbose=extended_verbose,return_only=True,creat_pointID=creat_pointID)
+            # ----------
+            if i == stagCloudData.indices[0]:
+                step = 'init'
+            elif i == stagCloudData.indices[-1]:
+                step = 'end'
+            else:
+                step = 'add'
+            # ----------
+            __write_time_H5(step,fname_h5,stagCloudData.drop,Points,ElementNumbers,vstack,path=path,pointID=pointID)
+            __write_time_xdmf(step,fname_vtk,fname_h5_geom,fname_h5,stagCloudData.drop,Points.shape[0],Points.shape[1],\
+                        ElementNumbers.shape[0],ElementNumbers.shape[1],vstack,path=path,timex=timex,pointID=pointID,\
+                        timeAsF=timeAsF)
+    
+    else:
+        im("Export mesh data in a unique file",pName,verbose)
+        fname_h5      = fname+'.h5'
+        fname_h5_geom = fname+'.h5'
+        im("Iteration on the cloud:",pName,verbose)
+        for i in stagCloudData.indices:
+            stagCloudData.iterate()
+            print()
+            cloudPlateGather.iterate()
+            if field == 'topo':
+                cloudPlateGather.drop.topologicalSimplification()
+                sd = cloudPlateGather.drop.export_topo(stagCloudData.drop)
+            elif field == 'magGSV':
+                sd = cloudPlateGather.drop.export_magGSV(stagCloudData.drop)
+            print()
+            
+            ifname = stagCloudData.drop.fname
+            im("    Current cloud drop: "+ifname,pName,verbose)
+            if timepar == 0:
+                timex = stagCloudData.indices[stagCloudData.ci]
+            elif timepar == 1:
+                timex = stagCloudData.drop.simuAge
+            elif timepar == 2:
+                timex = stagCloudData.drop.ti_step
+            # ----------
+            Points,ElementNumbers,vstack,pointID = stag2VTU(ifname,stagCloudData.drop,verbose=extended_verbose,return_only=True,creat_pointID=creat_pointID)
+            # ----------
+            if i == stagCloudData.indices[0]:
+                step = 'init'
+            elif i == stagCloudData.indices[-1]:
+                step = 'end'
+            else:
+                step = 'add'
+            # ----------
+            __write_time_H5(step,fname_h5,stagCloudData.drop,Points,ElementNumbers,vstack,path=path,multifile=multifile,field_preposition=ifname,pointID=pointID)
+            __write_time_xdmf(step,fname_vtk,fname_h5_geom,fname_h5,stagCloudData.drop,Points.shape[0],Points.shape[1],\
+                        ElementNumbers.shape[0],ElementNumbers.shape[1],vstack,path=path,multifile=multifile,timex=timex,field_preposition=ifname,pointID=pointID,\
+                        timeAsF=timeAsF)
     # --- ending
     im("Creation of time VTU: done!",pName,verbose)
     im("File log:",pName,verbose)
@@ -889,7 +1111,7 @@ def stagCloud2timeVTU(fname,stagCloudData,multifile=True,timepar=1,path='./',\
 
 
 def __write_time_H5(step,fname_h5,stagData,Points,ElementNumbers,vstack,path='./',\
-                    multifile=True,field_preposition=''):
+                    multifile=True,field_preposition='',pointID=None):
     """
     This function creats and exports trianguled geometry and field(s) into
     a .h5 files under the name fname. This function was built to be used by
@@ -914,6 +1136,10 @@ def __write_time_H5(step,fname_h5,stagData,Points,ElementNumbers,vstack,path='./
                       for the input stagCloudData, else all data will be
                       stored in a uniq .h5 file
           field_preposition = str, header of .h5 field if multifile = False
+          pointID = np.ndarray (or None), contains the list of points ID sorted as
+                    it is in the field stagData.x (Yin and Yang together). If pointID != None,
+                    then, the .h5/.xdmf will have an extra field corresponding to 
+                    these points ID (e.g. very usefull if post processing with TTK)
     """
     Points         = np.asarray(Points)
     ElementNumbers = np.asarray(ElementNumbers)
@@ -963,6 +1189,8 @@ def __write_time_H5(step,fname_h5,stagData,Points,ElementNumbers,vstack,path='./
                     dset = fid.create_dataset("Data2", data=Data, dtype=np.float32)
                 Data = Datap
                 dset = fid.create_dataset("Data3", data=Data, dtype=np.float32)
+            if pointID is not None:
+                dset = fid.create_dataset("pointID", data=pointID, dtype=np.int32)
         else:
             if stagData.fieldNature == 'Scalar':
                 dset = fid.create_dataset(field_preposition+"_Data0", data=Data, dtype=np.float32)
@@ -977,6 +1205,8 @@ def __write_time_H5(step,fname_h5,stagData,Points,ElementNumbers,vstack,path='./
                     dset = fid.create_dataset(field_preposition+"_Data2", data=Data, dtype=np.float32)
                 Data = Datap
                 dset = fid.create_dataset(field_preposition+"_Data3", data=Data, dtype=np.float32)
+            if pointID is not None:
+                dset = fid.create_dataset(field_preposition+"_pointID", data=pointID, dtype=np.int32)
         fid.close()
 
     else:
@@ -995,6 +1225,8 @@ def __write_time_H5(step,fname_h5,stagData,Points,ElementNumbers,vstack,path='./
                     dset = fid.create_dataset("Data2", data=Data, dtype=np.float32)
                 Data = Datap
                 dset = fid.create_dataset("Data3", data=Data, dtype=np.float32)
+            if pointID is not None:
+                dset = fid.create_dataset("pointID", data=pointID, dtype=np.int32)
             fid.close()
         else:
             fid = h5py.File(path+fname_h5, 'a')
@@ -1011,6 +1243,8 @@ def __write_time_H5(step,fname_h5,stagData,Points,ElementNumbers,vstack,path='./
                     dset = fid.create_dataset(field_preposition+"_Data2", data=Data, dtype=np.float32)
                 Data = Datap
                 dset = fid.create_dataset(field_preposition+"_Data3", data=Data, dtype=np.float32)
+            if pointID is not None:
+                dset = fid.create_dataset(field_preposition+"_pointID", data=pointID, dtype=np.int32)
             fid.close()
 
 
@@ -1019,7 +1253,7 @@ def __write_time_H5(step,fname_h5,stagData,Points,ElementNumbers,vstack,path='./
 
 def __write_time_xdmf(step,fname_vtk,fname_h5_geom,fname_h5,stagData,Points_shape0,Points_shape1,\
                       ElementNumbers_shape0,ElementNumbers_shape1,vstack,path='./',multifile=True,\
-                      timex=None,field_preposition=''):
+                      timeAsF=False,timex=None,field_preposition='',pointID=None):
     """
     This function creats and exports the geometry description file .xdmf
     under the name fname. This function was built to be used by
@@ -1046,18 +1280,33 @@ def __write_time_xdmf(step,fname_vtk,fname_h5_geom,fname_h5,stagData,Points_shap
                       split in as many .h5 files as iterations possible
                       for the input stagCloudData, else all data will be
                       stored in a uniq .h5 file
+          timeAsF   = bool, [only if multifile is False] is timeAsF is True then,
+                      the time will not be implemented as time for VTK files
+                      but will appears as a fields. Put another way, to navigate on
+                      time on paraview, you will change the display field and not the
+                      the time value (that will be unique).
+                      if timeAsF is False, you will ends up with a classical time VTK
+                      where you can press 'play' to see the evolution of your
+                      fields through time.
           field_preposition = str, header of .h5 field if multifile = False
           timex = int/float, value of the time that have to be entered in the
                   .xdmf file.
     """
     if step == 'init':
-        # Write the header for a structured grid:
-        fid       = open(path+fname_vtk,'w')  # Open the file for the first time
-        fid.write('<Xdmf Version="3.0">\n')
-        fid.write('<Domain>\n')
-        fid.write('<Grid Name="CellTime" GridType="Collection" CollectionType="Temporal">\n\n')
-        fid.close()
-
+        if not timeAsF:
+            # Write the header for a structured grid:
+            fid       = open(path+fname_vtk,'w')  # Open the file for the first time
+            fid.write('<Xdmf Version="3.0">\n')
+            fid.write('<Domain>\n')
+            fid.write('<Grid Name="CellTime" GridType="Collection" CollectionType="Temporal">\n\n')
+            fid.close()
+        else:
+            fid       = open(path+fname_vtk,'w')
+            fid.write('<Xdmf Version="3.0">\n')
+            fid.write('<Domain>\n')
+            fid.write('<Grid Name="Grid">\n\n')
+            fid.write('    <Geometry GeometryType="XYZ">\n')
+            fid.close()
     # Prepare the data set
     if stagData.fieldNature == 'Scalar':
         Data       = np.asarray(vstack)
@@ -1077,32 +1326,41 @@ def __write_time_xdmf(step,fname_vtk,fname_h5_geom,fname_h5,stagData,Points_shap
             Datath = np.asarray(vstacktheta)
             Dataph = np.asarray(vstackphi)
             Datap  = np.asarray(vstackp)
-    # Re-open the existing the header for a structured grid:
+    
+    # Write the geometry
     fid       = open(path+fname_vtk,'a')
-    fid.write('<Grid Name="Grid">\n\n')
-    fid.write('    <Time Value="%s" />\n'%timex)
-    fid.write('    <Geometry GeometryType="XYZ">\n')
-    # =======================================
-    # Write Points
-    fid.write('        <DataItem DataType="Float" Dimensions="%s %s" Format="HDF" Precision="8">\n' %\
-                (Points_shape0,Points_shape1))
-    fid.write('            '+fname_h5_geom+':/Points\n')
-    fid.write('        </DataItem>\n')
-    fid.write('    </Geometry>\n\n')
-    # =======================================
-    # Write NumberOfElements
-    fid.write('    <Topology NodesPerElement="%s" NumberOfElements="%s" TopologyType="Wedge">\n' %\
-                (ElementNumbers_shape1, ElementNumbers_shape0))
-    fid.write('        <DataItem DataType="Int" Dimensions="%s %s" Format="HDF" Precision="8">\n' %\
-                ((ElementNumbers_shape0, ElementNumbers_shape1)))
-    fid.write('            '+fname_h5_geom+':/NumberOfElements\n')
-    fid.write('        </DataItem>\n')
-    fid.write('    </Topology>\n\n')
+    if not timeAsF or np.logical_and(timeAsF,step == 'init'):
+        # Re-open the existing the header for a structured grid:
+        if not timeAsF:
+            fid.write('<Grid Name="Grid">\n\n')
+            fid.write('    <Time Value="%s" />\n'%timex)
+            fid.write('    <Geometry GeometryType="XYZ">\n')
+        # =======================================
+        # Write Points
+        fid.write('        <DataItem DataType="Float" Dimensions="%s %s" Format="HDF" Precision="8">\n' %\
+                    (Points_shape0,Points_shape1))
+        fid.write('            '+fname_h5_geom+':/Points\n')
+        fid.write('        </DataItem>\n')
+        fid.write('    </Geometry>\n\n')
+        # =======================================
+        # Write NumberOfElements
+        fid.write('    <Topology NodesPerElement="%s" NumberOfElements="%s" TopologyType="Wedge">\n' %\
+                    (ElementNumbers_shape1, ElementNumbers_shape0))
+        fid.write('        <DataItem DataType="Int" Dimensions="%s %s" Format="HDF" Precision="8">\n' %\
+                    ((ElementNumbers_shape0, ElementNumbers_shape1)))
+        fid.write('            '+fname_h5_geom+':/NumberOfElements\n')
+        fid.write('        </DataItem>\n')
+        fid.write('    </Topology>\n\n')
+
     # =======================================
     # Write field
     if multifile:
         if stagData.fieldNature == 'Scalar':
-            fid.write('    <Attribute AttributeType="Scalar" Center="Node" Name="%s">\n' % stagData.fieldType)
+            if timeAsF:
+                Attname = ''.join(stagData.fieldType.strip().split(' ')) + '_%s' %timex
+            else:
+                Attname = stagData.fieldType
+            fid.write('    <Attribute AttributeType="Scalar" Center="Node" Name="%s">\n' % Attname)
             fid.write('        <DataItem DataType="Float" Dimensions="%s" Format="HDF" Precision="8">\n'%\
                     Data.shape[0])
             fid.write('            '+fname_h5+':/Data0\n')
@@ -1110,25 +1368,49 @@ def __write_time_xdmf(step,fname_vtk,fname_h5_geom,fname_h5,stagData,Points_shap
             fid.write('    </Attribute>\n\n')
         else:
             # ---- Cartesian Velocities ----
-            fid.write('    <Attribute AttributeType="Vector" Center="Node" Name="%s">\n' % 'Cartesian Velocity')
+            if timeAsF:
+                Attname = ''.join('Cartesian Velo'.strip().split(' ')) + '_%s' %timex
+            else:
+                Attname = 'Cartesian Velocity'
+            fid.write('    <Attribute AttributeType="Vector" Center="Node" Name="%s">\n' % Attname)
             fid.write('        <DataItem DataType="Float" Dimensions="%s %s" Format="HDF" Precision="8">\n'%\
                     (Datax.shape[0], 3))
             fid.write('            '+fname_h5+':/Data1\n')
             fid.write('        </DataItem>\n')
             fid.write('    </Attribute>\n\n')
             if stagData.geometry == 'yy' or stagData.geometry == 'spherical':
+                if timeAsF:
+                    Attname = ''.join('Spherical Velo'.strip().split(' ')) + '_%s' %timex
+                else:
+                    Attname = 'Spherical Velocity'
                 # ----  Shperical Velocities ----
-                fid.write('    <Attribute AttributeType="Vector" Center="Node" Name="%s">\n' % 'Spherical Velocity')
+                fid.write('    <Attribute AttributeType="Vector" Center="Node" Name="%s">\n' % Attname)
                 fid.write('        <DataItem DataType="Float" Dimensions="%s %s" Format="HDF" Precision="8">\n'%\
                         (Datar.shape[0], 3))
                 fid.write('            '+fname_h5+':/Data2\n')
                 fid.write('        </DataItem>\n')
                 fid.write('    </Attribute>\n\n')
             # ---- Pressure ----
-            fid.write('    <Attribute AttributeType="Scalar" Center="Node" Name="%s">\n' % 'Pressure')
+            if timeAsF:
+                Attname = 'Pressure' + '_%s' %timex
+            else:
+                Attname = 'Pressure'
+            fid.write('    <Attribute AttributeType="Scalar" Center="Node" Name="%s">\n' % Attname)
             fid.write('        <DataItem DataType="Float" Dimensions="%s" Format="HDF" Precision="8">\n'%\
                     Datap.shape[0])
             fid.write('            '+fname_h5+':/Data3\n')
+            fid.write('        </DataItem>\n')
+            fid.write('    </Attribute>\n\n')
+        # ---- PointID ----
+        if pointID is not None:
+            if timeAsF:
+                Attname = 'PointID' + '_%s' %timex
+            else:
+                Attname = 'PointID'
+            fid.write('    <Attribute AttributeType="Scalar" Center="Node" Name="%s">\n' % Attname)
+            fid.write('        <DataItem DataType="Int" Dimensions="%s" Format="HDF" Precision="8">\n'%\
+                    pointID.shape[0])
+            fid.write('            '+fname_h5+':/pointID\n')
             fid.write('        </DataItem>\n')
             fid.write('    </Attribute>\n\n')
         # Ending
@@ -1137,7 +1419,11 @@ def __write_time_xdmf(step,fname_vtk,fname_h5_geom,fname_h5,stagData,Points_shap
         fid.close()
     else:
         if stagData.fieldNature == 'Scalar':
-            fid.write('    <Attribute AttributeType="Scalar" Center="Node" Name="%s">\n' % stagData.fieldType)
+            if timeAsF:
+                Attname = ''.join(stagData.fieldType.strip().split(' ')) + '_%s' %timex
+            else:
+                Attname = stagData.fieldType
+            fid.write('    <Attribute AttributeType="Scalar" Center="Node" Name="%s">\n' % Attname)
             fid.write('        <DataItem DataType="Float" Dimensions="%s" Format="HDF" Precision="8">\n'%\
                     Data.shape[0])
             fid.write('            '+fname_h5+':/'+field_preposition+'_Data0\n')
@@ -1145,7 +1431,11 @@ def __write_time_xdmf(step,fname_vtk,fname_h5_geom,fname_h5,stagData,Points_shap
             fid.write('    </Attribute>\n\n')
         else:
             # ---- Cartesian Velocities ----
-            fid.write('    <Attribute AttributeType="Vector" Center="Node" Name="%s">\n' % 'Cartesian Velocity')
+            if timeAsF:
+                Attname = ''.join('Cartesian Velo'.strip().split(' ')) + '_%s' %timex
+            else:
+                Attname = 'Cartesian Velocity'
+            fid.write('    <Attribute AttributeType="Vector" Center="Node" Name="%s">\n' % Attname)
             fid.write('        <DataItem DataType="Float" Dimensions="%s %s" Format="HDF" Precision="8">\n'%\
                     (Datax.shape[0], 3))
             fid.write('            '+fname_h5+':/'+field_preposition+'_Data1\n')
@@ -1153,21 +1443,42 @@ def __write_time_xdmf(step,fname_vtk,fname_h5_geom,fname_h5,stagData,Points_shap
             fid.write('    </Attribute>\n\n')
             if stagData.geometry == 'yy' or stagData.geometry == 'spherical':
                 # ----  Shperical Velocities ----
-                fid.write('    <Attribute AttributeType="Vector" Center="Node" Name="%s">\n' % 'Spherical Velocity')
+                if timeAsF:
+                    Attname = ''.join('Spherical Velo'.strip().split(' ')) + '_%s' %timex
+                else:
+                    Attname = 'Spherical Velocity'
+                fid.write('    <Attribute AttributeType="Vector" Center="Node" Name="%s">\n' % Attname)
                 fid.write('        <DataItem DataType="Float" Dimensions="%s %s" Format="HDF" Precision="8">\n'%\
                         (Datar.shape[0], 3))
                 fid.write('            '+fname_h5+':/'+field_preposition+'_Data2\n')
                 fid.write('        </DataItem>\n')
                 fid.write('    </Attribute>\n\n')
             # ---- Pressure ----
-            fid.write('    <Attribute AttributeType="Scalar" Center="Node" Name="%s">\n' % 'Pressure')
+            if timeAsF:
+                Attname = 'Pressure' + '_%s' %timex
+            else:
+                Attname = 'Pressure'
+            fid.write('    <Attribute AttributeType="Scalar" Center="Node" Name="%s">\n' % Attname)
             fid.write('        <DataItem DataType="Float" Dimensions="%s" Format="HDF" Precision="8">\n'%\
                     Datap.shape[0])
             fid.write('            '+fname_h5+':/'+field_preposition+'_Data3\n')
             fid.write('        </DataItem>\n')
             fid.write('    </Attribute>\n\n')
+        # ---- PointID ----
+        if pointID is not None:
+            if timeAsF:
+                Attname = 'PointID' + '_%s' %timex
+            else:
+                Attname = 'PointID'
+            fid.write('    <Attribute AttributeType="Scalar" Center="Node" Name="%s">\n' % Attname)
+            fid.write('        <DataItem DataType="Int" Dimensions="%s" Format="HDF" Precision="8">\n'%\
+                    pointID.shape[0])
+            fid.write('            '+fname_h5+':/'+field_preposition+'_pointID\n')
+            fid.write('        </DataItem>\n')
+            fid.write('    </Attribute>\n\n')
         # Ending
-        fid.write('</Grid>\n\n')
+        if not timeAsF:
+            fid.write('</Grid>\n\n')
         # close the file
         fid.close()
 
@@ -1299,6 +1610,33 @@ def __WriteVTU(fname,Points,ElementNumbers,vstack,fieldName,ASCII=True,path='./'
     fid.write('  </UnstructuredGrid>\n')
     fid.write('</VTKFile>\n')
     fid.close()
+
+
+
+
+
+def stack_XDMF(directory,xdmf_fnames):
+    """
+    This function stacks a list a .xdmf files contained together
+    in the same directory, which is also the directory where the
+    corresponding .h5 is contained.
+    Warning: The grid have to be the same between files.
+    """
+    nof = len(xdmf_fnames)
+    # -------------------------
+    # Read the first file to extract the header, the geometry
+    # and the file's tail
+    header = []     # will contain the header lines
+    tail   = []     # will contain the tail of the file
+    geom   = []     # will contain the lines corresponding to the geometry of the grid
+    temp = []
+    with open(directory+xdmf_fnames[0],'r') as data:
+        for line in data:
+            temp.append(line)
+    return temp
+
+
+
 
 
 

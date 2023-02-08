@@ -16,7 +16,7 @@ from .stagReader import fields, reader_time, reader_rprof, reader_plates_analyse
 from .stagError import NoFileError, InputGridGeometryError, GridGeometryError, GridGeometryInDevError, \
                        MetaCheckFieldUnknownError, MetaFileInappropriateError, FieldTypeInDevError, \
                        VisuGridGeometryError, StagTypeError, CloudBuildIndexError, SliceAxisError, \
-                       IncoherentSliceAxisError
+                       IncoherentSliceAxisError, StagUnknownLayerError, StagComputationalError
 
 
 
@@ -91,6 +91,9 @@ class MainStagObject:
                            (Default: resampling=[1,1,1], means no resampling)
               """
         self.im('Reading and resampling: '+fname)
+        # - Autocompletion of the path
+        if directory[-1] is not '/':
+            directory += '/'
         self.path  = Path(directory+fname) #creat a Path object
         self.fname = fname
         self.resampling = resampling
@@ -116,8 +119,8 @@ class MainStagObject:
         if type(self.x_coords) != np.ndarray:
             self.x_coords = np.array([self.x_coords])
             self.im('  - 2D data detected: plan yz')
-            if self.geometry != 'cart2D':
-                raise GridGeometryError(self.geometry,'cart2D')
+            if self.geometry != 'cart2D' and self.geometry != 'annulus':
+                raise GridGeometryError(self.geometry,'cart2D or annulus')
         elif type(self.y_coords) != np.ndarray:
             self.y_coords = np.array([self.y_coords])
             self.im('  - 2D data detected: plan xz')
@@ -275,8 +278,12 @@ class MainStagObject:
             self.fieldType = 'Melt Velocity'
         elif ''.join(n[0:3]) == 'age':
             self.fieldType = 'Age'
+        elif ''.join(n[0:3]) == 'nrc':
+            self.fieldType = 'Continents'
         elif ''.join(n[0:1]) == 'w':
             self.fieldType = 'Vorticity'
+        elif ''.join(n[0:4]) == 'prot':
+            self.fieldType = 'Prot'
         else:
             self.fieldType = 'Error: Undetermined'
             raise FieldTypeInDevError(fname)
@@ -290,7 +297,7 @@ class MainStagObject:
         self.im('Reading and resampling operations done!')
     
 
-    def stag2VTU(self,fname=None,path='./',ASCII=False,verbose=True):
+    def stag2VTU(self,fname=None,path='./',ASCII=False,creat_pointID=False,verbose=True):
             """ Extension of the stagVTK package, directly available on stagData !
             This function creat '.vtu' or 'xdmf/h5' file readable with Paraview to efficiently 
             visualize 3D data contain in a stagData object. This function works directly
@@ -302,10 +309,17 @@ class MainStagObject:
                         [Default: path='./']
                 ASCII = bool, if True, the .vtu file will be write in ASCII mode
                         if not, in binary mode. [Default, ASCII=True]
+                creat_pointID = bool, if True then creat the list of points ID sorted as
+                          it is in the field stagData.x (Yin and Yang together).
+                          This field will then transfert to the writing function and
+                          the .h5/.xdmf will have an extra field corresponding to 
+                          these points ID (e.g. very usefull if post processing with TTK)
+                          WARNING: This option is only available if ASCII = False
+                                   (ie .h5/.xdmf output)
             """
             self.im('Requested: Build VTU from StagData object')
             if self.geometry == 'cart2D' or self.geometry == 'annulus':
-                raise VisuGridGeometryError(self.geometry,'cart3D or yy')
+                raise VisuGridGeometryError(self.geometry,'cart3D or yy or spherical')
             if fname == None:
                 import time
                 (y,m,d,h,mins,secs,bin1,bin2,bin3) = time.localtime()
@@ -313,7 +327,7 @@ class MainStagObject:
                 self.im('Automatic file name attribution: '+fname)
             #Importation of the stagVTK package
             from .stagVTK import stag2VTU
-            stag2VTU(fname,self,path,ASCII=ASCII,verbose=verbose)
+            stag2VTU(fname,self,path,ASCII=ASCII,creat_pointID=creat_pointID,verbose=verbose)
     
     
 
@@ -331,6 +345,7 @@ class StagCartesianGeometry(MainStagObject):
     def __init__(self,geometry):
         super().__init__()  # inherit all the methods and properties from MainStagObject
         self.geometry = geometry
+        self.plan     = None
         # ----- Cartesian 2D and 3D geometries ----- #
         self.XYZind = []    #Matrix of good index after the mesh operation
         self.x = []         #Matrix of X coordinates meshed
@@ -348,12 +363,23 @@ class StagCartesianGeometry(MainStagObject):
         """
         self.im('Processing stag Data:')
         self.im('  - Grid Geometry')
+        # Meshing
+        (self.x,self.y,self.z) = np.meshgrid(self.x_coords,self.y_coords,self.z_coords,indexing='ij')
+        # Geometry
         if self.geometry == 'cart2D':
             self.im('      - 2D cartesian grid geometry')
+            if  self.x.shape[0] == 1:
+                self.im('      - data detected: plan yz')
+                self.plan = 'yz'
+            elif self.x.shape[1] == 1:
+                self.im('      - data detected: plan xz')
+                self.plan = 'xz'
+            elif self.x.shape[2] == 1:
+                self.im('      - data detected: plan xy')
+                self.plan = 'xy'
         else:
             self.im('      - 3D cartesian grid geometry')
-        (self.x,self.y,self.z) = np.meshgrid(self.x_coords,self.y_coords,self.z_coords,indexing='ij')
-        #Same operation but on index matrix:
+        # Same operation but on index matrix:
         (Xind,Yind,Zind) = np.meshgrid(self.xind,self.yind,self.zind, indexing='ij')
         Xind = Xind.reshape(Xind.shape[0]*Xind.shape[1]*Xind.shape[2])
         Yind = Yind.reshape(Yind.shape[0]*Yind.shape[1]*Yind.shape[2])
@@ -412,8 +438,6 @@ class StagYinYangGeometry(MainStagObject):
         self.Z = []         #Matrix of Z coordinates meshed
         self.layers = []    #matrix of layer's index meshed
         self.XYZind = []    #Matrix of good index after the mesh operation
-        self.r1 = []        #Matrix of the radius of points for Yin grid
-        self.r2 = []        #Matrix of the radius of points for Yang grid
         self.x1_overlap = []#Yin grid x matrix - overlapping grids:
         self.y1_overlap = []#Yin grid y matrix
         self.z1_overlap = []#Yin grid z matrix
@@ -468,6 +492,21 @@ class StagYinYangGeometry(MainStagObject):
         self.vr2     = []    #Matrix of radial component of the vectorial field for the Yang grid
         self.vtheta2 = []    #Matrix of theta component of the vectorial field for the Yang grid
         self.vphi2   = []    #Matrix of phi component of the vectorial field for the Yang grid
+        # Stacked Yin Yang grid
+        self.x      = []    #stacked grid (cartesian)
+        self.y      = []
+        self.z      = []
+        self.r      = []    #stacked grid (spherical)
+        self.theta  = []
+        self.phi    = []
+        self.v      = []    #stacked scalar field
+        self.P      = []    #stacked pressure
+        self.vx     = []    #stacked vectorial fields
+        self.vy     = []
+        self.vz     = []
+        self.vtheta = []
+        self.vphi   = []
+        self.vr     = []
 
 
     def stagProcessing(self, build_redflag_point=False, build_overlapping_field=False):
@@ -590,11 +629,8 @@ class StagYinYangGeometry(MainStagObject):
             V2 = tempField[:,1]
             if build_overlapping_field:
                 self.im('         - Overlapping field requested')
-                self.v1_overlap = [] #Yin
-                self.v2_overlap = [] #Yang
-                for gid in goodIndex:
-                    self.v1_overlap.append(V1[gid])
-                    self.v2_overlap.append(V2[gid])
+                self.v1_overlap = V1[goodIndex] #Yin
+                self.v2_overlap = V2[goodIndex] #Yang
                 
             #Apply redFlags on goodindex:
             self.im('      - Processing of redFlags')
@@ -619,6 +655,26 @@ class StagYinYangGeometry(MainStagObject):
             self.vr2     = np.array(self.vr2)
             self.vtheta2 = np.array(self.vtheta2)
             self.vphi2   = np.array(self.vphi2)
+            # Gather Yin and Yang
+            self.im('  - Gather Yin and Yang: all Yin then all Yang')
+            self.im('     - Stack the grids')
+            self.x       = np.stack((self.x1,self.x2)).reshape(2*len(self.x1))
+            self.y       = np.stack((self.y1,self.y2)).reshape(2*len(self.y1))
+            self.z       = np.stack((self.z1,self.z2)).reshape(2*len(self.z1))
+            self.r       = np.stack((self.r1,self.r2)).reshape(2*len(self.r1))
+            self.theta   = np.stack((self.theta1,self.theta2)).reshape(2*len(self.theta1))
+            self.phi     = np.stack((self.phi1,self.phi2)).reshape(2*len(self.phi1))
+            self.im('     - Stack the fields')
+            # Scalar
+            self.v       = np.stack((self.v1,self.v2)).reshape(2*len(self.v1))
+            # Vectorial (no stacked because empty)
+            self.vx      = np.array(self.vx)
+            self.vy      = np.array(self.vy)
+            self.vz      = np.array(self.vz)
+            self.P       = np.array(self.P)
+            self.vtheta  = np.array(self.vtheta)
+            self.vphi    = np.array(self.vphi)
+            self.vr      = np.array(self.vr)
 
             
         elif self.fieldNature == 'Vectorial':
@@ -671,24 +727,15 @@ class StagYinYangGeometry(MainStagObject):
             if build_overlapping_field:
                 self.im('         - Overlapping field requested')
                 #Re-sampling
-                self.vx1_overlap = [] #Yin
-                self.vx2_overlap = [] #Yang
-                self.vy1_overlap = []
-                self.vy2_overlap = []
-                self.vz1_overlap = []
-                self.vz2_overlap = []
-                self.P1_overlap  = []
-                self.P2_overlap  = []
-                for gid in goodIndex:
-                    self.vx1_overlap.append(VX1[gid])
-                    self.vx2_overlap.append(VX2[gid])
-                    self.vy1_overlap.append(VY1[gid])
-                    self.vy2_overlap.append(VY2[gid])
-                    self.vz1_overlap.append(VZ1[gid])
-                    self.vz2_overlap.append(VZ2[gid])
-                    self.P1_overlap.append(P1[gid])
-                    self.P2_overlap.append(P2[gid])
-            
+                self.vx1_overlap = VX1[goodIndex] #Yin
+                self.vx2_overlap = VX2[goodIndex] #Yang
+                self.vy1_overlap = VY1[goodIndex]
+                self.vy2_overlap = VY2[goodIndex]
+                self.vz1_overlap = VZ1[goodIndex]
+                self.vz2_overlap = VZ2[goodIndex]
+                self.P1_overlap  = P1[goodIndex]
+                self.P2_overlap  = P2[goodIndex]
+                            
             #Apply redFlags on goodindex:
             self.im('      - Processing of redFlags')
             mask = np.ones(len(goodIndex),dtype=bool) # all True
@@ -729,9 +776,31 @@ class StagYinYangGeometry(MainStagObject):
             #fills the .v1 and .v2 by the norm of the velocity
             self.v1  = np.sqrt(self.vx1**2+self.vy1**2+self.vz1**2) #the norm
             self.v2  = np.sqrt(self.vx2**2+self.vy2**2+self.vz2**2) #the norm
+
+            # Gather Yin and Yang
+            self.im('  - Gather Yin and Yang: all Yin then all Yang')
+            self.im('     - Stack the grids')
+            self.x       = np.stack((self.x1,self.x2)).reshape(2*len(self.x1))
+            self.y       = np.stack((self.y1,self.y2)).reshape(2*len(self.y1))
+            self.z       = np.stack((self.z1,self.z2)).reshape(2*len(self.z1))
+            self.r       = np.stack((self.r1,self.r2)).reshape(2*len(self.r1))
+            self.theta   = np.stack((self.theta1,self.theta2)).reshape(2*len(self.theta1))
+            self.phi     = np.stack((self.phi1,self.phi2)).reshape(2*len(self.phi1))
+            self.im('     - Stack the fields')
+            # Scalar
+            self.v       = np.stack((self.v1,self.v2)).reshape(2*len(self.v1))
+            # Vectorial (no stacked because empty)
+            self.vx      = np.stack((self.vx1,self.vx2)).reshape(2*len(self.v1))
+            self.vy      = np.stack((self.vy1,self.vy2)).reshape(2*len(self.v1))
+            self.vz      = np.stack((self.vz1,self.vz2)).reshape(2*len(self.v1))
+            self.P       = np.stack((self.P1,self.P2)).reshape(2*len(self.v1))
+            self.vtheta  = np.stack((self.vtheta1,self.vtheta2)).reshape(2*len(self.v1))
+            self.vphi    = np.stack((self.vphi1,self.vphi2)).reshape(2*len(self.v1))
+            self.vr      = np.stack((self.vr1,self.vr2)).reshape(2*len(self.v1))
         
         # == Processing Finish !
         self.im('Processing of stag data done!')
+    
 
 
 
@@ -747,7 +816,7 @@ class StagSphericalGeometry(MainStagObject):
     def __init__(self,geometry):
         super().__init__()  # inherit all the methods and properties from MainStagObject
         self.geometry = geometry
-        # ----- Cartesian 2D and 3D geometries ----- #
+        self.plan     = None # stay None for 3D spherical and get a value for annulus
         self.x  = []        #Matrix of X coordinates meshed (in spherical shape)
         self.y  = []        #Matrix of Y coordinates meshed (in spherical shape)
         self.z  = []        #Matrix of Z coordinates meshed (in spherical shape)
@@ -777,8 +846,22 @@ class StagSphericalGeometry(MainStagObject):
         """
         self.im('Processing stag Data:')
         self.im('  - Grid Geometry')
-        self.im('      - 3D cartesian grid geometry')
+        # Meshing
         (self.x,self.y,self.z) = np.meshgrid(self.x_coords,self.y_coords,self.z_coords,indexing='ij')
+        # Geometry
+        if self.geometry == 'spherical':
+            self.im('      - 3D cartesian grid geometry')
+        elif self.geometry == 'annulus':
+            self.im('      - 2D annulus grid geometry')
+            if  self.x.shape[0] == 1:
+                self.im('      - data detected: plan yz')
+                self.plan = 'yz'
+            elif self.x.shape[1] == 1:
+                self.im('      - data detected: plan xz')
+                self.plan = 'xz'
+            elif self.x.shape[2] == 1:
+                self.im('      - data detected: plan xy')
+                self.plan = 'xy'
         #save cartesian grid geometry
         self.xc = self.x
         self.yc = self.y
@@ -814,7 +897,7 @@ class StagSphericalGeometry(MainStagObject):
             phi   = np.arctan2(y,x)
             return (r,theta,phi)
         
-        #Creation of Yin-Yang grids:
+        #Creation of the spherical grid:
         self.im('      - Creation of the spherical grids')
         (self.x,self.y,self.z) = rectangular2Spherical(self.x,self.y,self.z,self.rcmb)
 
@@ -874,12 +957,12 @@ class StagSphericalGeometry(MainStagObject):
             (tX, tY, tZ)       = (None, None, None)
             (Vtheta, Vphi, Vr) = (None, None, None)
             
-            #Creation of non overlapping data matrices for Yin and Yang
-            self.vx = np.array(self.vx)
-            self.vy = np.array(self.vy)
-            self.vz = np.array(self.vz)
-            self.vr = np.array(self.vr)
-            self.P = np.array(self.P)
+            #Adjusting the type
+            #self.vx = np.array(self.vx)
+            #self.vy = np.array(self.vy)
+            #self.vz = np.array(self.vz)
+            #self.vr = np.array(self.vr)
+            #self.P = np.array(self.P)
             
             #Tranformation of velocities from cartesian to spherical:
             self.im('      - Conversion of Velocities: Cartesian -> Spherical')
@@ -897,13 +980,15 @@ class StagSphericalGeometry(MainStagObject):
             self.vz = self.vz.reshape(self.nx,self.ny,self.nz)
             self.vr = self.vr.reshape(self.nx,self.ny,self.nz)
             self.P  = self.P.reshape(self.nx,self.ny,self.nz)
-
+        
             #fills the .v1 and .v2 by the norm of the velocity
             self.v  = np.sqrt(self.vx**2+self.vy**2+self.vz**2) #the norm
             self.v  = self.v.reshape(self.nx,self.ny,self.nz)
         
         # == Processing Finish !
         self.im('Processing of stag data done!')
+
+
 
 
 
@@ -928,7 +1013,8 @@ class StagData():
         elif geometry == 'spherical':
             return StagSphericalGeometry(geometry)
         elif geometry == 'annulus':
-            raise GridGeometryInDevError(geometry)
+            return StagSphericalGeometry(geometry)
+            #raise GridGeometryInDevError(geometry)
         else:
             raise InputGridGeometryError(geometry)
 
@@ -1017,6 +1103,7 @@ class YinYangSliceData(MainSliceData):
     def __init__(self):
         super().__init__()  # inherit all the methods and properties from MainSliceData
         self.geometry = 'yy'
+        self.normal = None
         # ----- Yin Yang geometry ----- #
         self.r1 = []        #Matrix of the radius of points for Yin grid
         self.r2 = []        #Matrix of the radius of points for Yang grid
@@ -1026,6 +1113,10 @@ class YinYangSliceData(MainSliceData):
         self.x2 = []        #Yang grid x matrix
         self.y2 = []        #Yang grid y matrix
         self.z2 = []        #Yang grid z matrix
+        self.theta1 = []    #Yin  grid theta matrix
+        self.theta2 = []    #Yang grid theta matrix
+        self.phi1 = []      #Yin  grid phi matric
+        self.phi2 = []      #Yang grid phi matric
         #For scalar field only:
         self.v1 = []        #Matrix of scalar field for the Yin grid (or norm of velocity on Yin)
         self.v2 = []        #Matrix of scalar field for the Yang grid (or norm of velocity on Yang)
@@ -1048,6 +1139,9 @@ class YinYangSliceData(MainSliceData):
         self.x = []    #np.ndarray for x1 and x2 stacked
         self.y = []    #np.ndarray for y1 and y2 stacked
         self.z = []    #np.ndarray for z1 and z2 stacked
+        self.r = []
+        self.theta = []
+        self.phi = []
         #Stacked scalar fields
         self.v = []    #np.ndarray for v1 and v2 stacked
         #Staked vectorial fields
@@ -1060,67 +1154,97 @@ class YinYangSliceData(MainSliceData):
         self.vr     = []
 
         
-    def stackyy(self):
+    def stackyy(self,nodp_x1,nodp_x2,nod_v1,nod_v2):
         """
         Computes all stacked fields from YinYang grid
+        -> Stack Yin and Yang grid
+
+            nodp_x1 = self.x1.shape[0]
+            nodp_x2 = self.x2.shape[0]
+            nod_v1  = self.v1.shape[0]
+            nod_v2  = self.v2.shape[0]
         """
         #Dynamic containers: Use CPU on each call
-        nodp = self.x1.shape[0]
-        nodv = self.v1.shape[0]
         self.im('Stack grid matrices')
-        self.x              = np.zeros((nodp*2))
-        self.x[0:nodp]      = self.x1
-        self.x[nodp:2*nodp] = self.x2
-        self.y              = np.zeros((nodp*2))
-        self.y[0:nodp]      = self.y1
-        self.y[nodp:2*nodp] = self.y2
-        self.z              = np.zeros((nodp*2))
-        self.z[0:nodp]      = self.z1
-        self.z[nodp:2*nodp] = self.z2
-        self.r              = np.zeros((nodp*2))
-        self.r[0:nodp]      = self.r1
-        self.r[nodp:2*nodp] = self.r2
+        self.x              = np.zeros((nodp_x1+nodp_x2))
+        self.x[0:nodp_x1]      = self.x1
+        self.x[nodp_x1:nodp_x1+nodp_x2] = self.x2
+        self.y              = np.zeros((nodp_x1+nodp_x2))
+        self.y[0:nodp_x1]      = self.y1
+        self.y[nodp_x1:nodp_x1+nodp_x2] = self.y2
+        self.z              = np.zeros((nodp_x1+nodp_x2))
+        self.z[0:nodp_x1]      = self.z1
+        self.z[nodp_x1:nodp_x1+nodp_x2] = self.z2
+        self.r              = np.zeros((nodp_x1+nodp_x2))
+        self.r[0:nodp_x1]      = self.r1
+        self.r[nodp_x1:nodp_x1+nodp_x2] = self.r2
+        self.theta              = np.zeros((nodp_x1+nodp_x2))
+        self.theta[0:nodp_x1]      = self.theta1
+        self.theta[nodp_x1:nodp_x1+nodp_x2] = self.theta2
+        self.phi                = np.zeros((nodp_x1+nodp_x2))
+        self.phi[0:nodp_x1]        = self.phi1
+        self.phi[nodp_x1:nodp_x1+nodp_x2]   = self.phi2
         self.im('Stack fields')
         if self.fieldNature == 'Scalar':
-            self.v              = np.zeros((nodv*2))
-            self.v[0:nodv]      = self.v1
-            self.v[nodv:2*nodv] = self.v2
+            self.v              = np.zeros((nod_v1+nod_v2))
+            self.v[0:nod_v1]      = self.v1
+            self.v[nod_v1:nod_v1+nod_v2] = self.v2
+            # empty
+            self.vx,self.vy,self.vz,self.vr = np.array([]),np.array([]),np.array([]),np.array([])
+            self.vtheta,self.vphi,self.P = np.array([]),np.array([]),np.array([])
         else:
-            nodv = self.v1.shape[0]
-            nods = self.vr1.shape[0]
-            self.v              = np.zeros((nodv*2)) # norm
-            self.v[0:nodv]      = self.v1
-            self.v[nodv:2*nodv] = self.v2
-            self.vx              = np.zeros((nods*2))
-            self.vx[0:nods]      = self.vx1
-            self.vx[nods:2*nods] = self.vx2
-            self.vy              = np.zeros((nods*2))
-            self.vy[0:nods]      = self.vy1
-            self.vy[nods:2*nods] = self.vy2
-            self.vz              = np.zeros((nods*2))
-            self.vz[0:nods]      = self.vz1
-            self.vz[nods:2*nods] = self.vz2
-            self.P               = np.zeros((nods*2))
-            self.P[0:nods]       = self.P1
-            self.P[nods:2*nods]  = self.P2
-
-        self.v = np.array(list(self.v1)+list(self.v2))
-        self.vx = np.array(list(self.vx1)+list(self.vx2))
-        self.vy = np.array(list(self.vy1)+list(self.vy2))
-        self.vz = np.array(list(self.vz1)+list(self.vz2))
-        self.P  = np.array(list(self.P1)+list(self.P2))
-        self.vtheta = np.array(list(self.vtheta1)+list(self.vtheta2))
-        self.vphi   = np.array(list(self.vphi1)+list(self.vphi2))
-        self.vr     = np.array(list(self.vr1)+list(self.vr2))
+            self.v              = np.zeros((nod_v1+nod_v2)) # norm
+            self.v[0:nod_v1]      = self.v1
+            self.v[nod_v1:nod_v1+nod_v2] = self.v2
+            self.vx              = np.zeros((nod_v1+nod_v2))
+            self.vx[0:nod_v1]      = self.vx1
+            self.vx[nod_v1:nod_v1+nod_v2] = self.vx2
+            self.vy              = np.zeros((nod_v1+nod_v2))
+            self.vy[0:nod_v1]      = self.vy1
+            self.vy[nod_v1:nod_v1+nod_v2] = self.vy2
+            self.vz              = np.zeros((nod_v1+nod_v2))
+            self.vz[0:nod_v1]      = self.vz1
+            self.vz[nod_v1:nod_v1+nod_v2] = self.vz2
+            self.P               = np.zeros((nod_v1+nod_v2))
+            self.P[0:nod_v1]       = self.P1
+            self.P[nod_v1:nod_v1+nod_v2]  = self.P2
+            self.vr              = np.zeros((nod_v1+nod_v2))
+            self.vr[0:nod_v1]      = self.vr1
+            self.vr[nod_v1:nod_v1+nod_v2] = self.vr2
+            self.vtheta              = np.zeros((nod_v1+nod_v2))
+            self.vtheta[0:nod_v1]      = self.vtheta1
+            self.vtheta[nod_v1:nod_v1+nod_v2] = self.vtheta2
+            self.vphi                = np.zeros((nod_v1+nod_v2)) # norm
+            self.vphi[0:nod_v1]        = self.vphi1
+            self.vphi[nod_v1:nod_v1+nod_v2]   = self.vphi2
         self.im('Stacking done successfully!')
 
 
-    def sliceExtractor(self,stagData,layer):
+    def slicing(self,stagData,axis=0,normal=[1,0,0],layer=-1,interp_method='nearest'):
         """
-        Extract a depth slice in a stagData.StagYinYangGeometry object.
+        Extract an annulus-slice or a depth-slice in a stagData.StagYinYangGeometry object.
+        The annulus-slice is defined according to a normal vector, perpendicular to the slicing plan.
+        The detph-slice of defined according to the depth layer.
         <i> : stagData = stagData.StagYinYangGeometry
-              layer    = int, index of the stagData layer that will be extracted in
+              axis     = int, integer indicating the axis of the slice (default, axis=0).
+                         axis = 0  or axis = 'annulus'
+                                    -> an annulus-slice 
+                                      The normal of the plan containing the annulus is 
+                                      is given in the 'normal' input argument
+                                      WARNING: With the annulus slicing, you will loose the dual Ying Yang description (x1,x2 -> x)
+                         axis = 1  or axis = 'layer'
+                                    -> a r-constant-slice (depth-slice, a.k.a iso r)
+                                      The layer index for the slice is given in the 'layer' input argument
+              layer    = int, (only of axis == 1), value of the stagData.slayers that will be extracted in
                          the new SliceData object.
+                         e.g. if you chose layer = 109 then you will extract the layer of the stagData where
+                              stagData.slayers == 109
+                         Default: layer = -1
+              normal   = list/array, (only if axis == 0), vector of coordinates corresponding
+                         to the normal to the plan containing the annlus.
+                         This definition is consistent with the normal of the slicing plan in the Paraview software!
+                         normal = (nx,ny,nz)
+                         Default: normal = (1,0,0)
         """
         self.im('Begin the slice extraction')
         #check the geometry:
@@ -1137,62 +1261,262 @@ class YinYangSliceData(MainSliceData):
         NxNy = int(len(stagData.x1)/Nz)   #Number of points for each layers
         #StagInheritance
         self.sliceInheritance(stagData)
-        #Specific inheritance
-        self.r1 = stagData.r1.reshape(NxNy,Nz)[:,layer]
-        self.r2 = stagData.r2.reshape(NxNy,Nz)[:,layer]
-        #Creation of the SliceData object:
-        nod     = len(stagData.slayers)
-        NxNy    = int(len(stagData.r1)/nod)
-        radtemp = stagData.r1.reshape(NxNy,nod)
-        rad = [np.amax(radtemp[:,i]) for i in range(nod)]
-        self.layer = stagData.slayers[layer]
-        self.depth = stagData.depths[layer]
-        self.x1 = stagData.x1.reshape(NxNy,Nz)[:,layer]
-        self.y1 = stagData.y1.reshape(NxNy,Nz)[:,layer]
-        self.z1 = stagData.z1.reshape(NxNy,Nz)[:,layer]
-        self.x2 = stagData.x2.reshape(NxNy,Nz)[:,layer]
-        self.y2 = stagData.y2.reshape(NxNy,Nz)[:,layer]
-        self.z2 = stagData.z2.reshape(NxNy,Nz)[:,layer]
-        if ftype == 'Scalar':
-            self.v1   = stagData.v1.reshape(NxNy,Nz)[:,layer]
-            self.v2   = stagData.v2.reshape(NxNy,Nz)[:,layer]
-            # empty
-            self.vx1   = stagData.vx1
-            self.vx2   = stagData.vx2
-            self.vy1   = stagData.vy1
-            self.vy2   = stagData.vy2
-            self.vz1   = stagData.vz1
-            self.vz2   = stagData.vz2
-            self.vr1   = stagData.vr1
-            self.vr2   = stagData.vr2
-            self.vtheta1   = stagData.vtheta1
-            self.vtheta2   = stagData.vtheta2
-            self.vphi1     = stagData.vphi1
-            self.vphi2     = stagData.vphi2
-            self.P1   = stagData.P1
-            self.P2   = stagData.P2
-        else:
-            self.vx1   = stagData.vx1.reshape(NxNy,Nz)[:,layer]
-            self.vx2   = stagData.vx2.reshape(NxNy,Nz)[:,layer]
-            self.vy1   = stagData.vy1.reshape(NxNy,Nz)[:,layer]
-            self.vy2   = stagData.vy2.reshape(NxNy,Nz)[:,layer]
-            self.vz1   = stagData.vz1.reshape(NxNy,Nz)[:,layer]
-            self.vz2   = stagData.vz2.reshape(NxNy,Nz)[:,layer]
-            self.vr1   = stagData.vr1.reshape(NxNy,Nz)[:,layer]
-            self.vr2   = stagData.vr2.reshape(NxNy,Nz)[:,layer]
-            self.vtheta1   = stagData.vtheta1.reshape(NxNy,Nz)[:,layer]
-            self.vtheta2   = stagData.vtheta2.reshape(NxNy,Nz)[:,layer]
-            self.vphi1     = stagData.vphi1.reshape(NxNy,Nz)[:,layer]
-            self.vphi2     = stagData.vphi2.reshape(NxNy,Nz)[:,layer]
-            self.P1   = stagData.P1.reshape(NxNy,Nz)[:,layer]
-            self.P2   = stagData.P2.reshape(NxNy,Nz)[:,layer]
-            self.v1   = stagData.v1.reshape(NxNy,Nz)[:,layer]  #norm
-            self.v2   = stagData.v2.reshape(NxNy,Nz)[:,layer]  #norm
-        #stacking
-        self.stackyy()
-        self.im('Extraction done successfully!')
-        self.im('    - layer        = '+str(layer))
-        self.im('    - pts in slice = '+str(NxNy))
+
+        if axis == 0 or axis == 'annulus':
+            self.im('REMINDER:  With the annulus slicing, you will loose the dual Ying Yang description')
+            self.im('Extraction of an annulus slice (i.e. axis=0')
+            self.im('   Normal to the slicing plan: '+str(normal[0])+','+str(normal[1])+','+str(normal[2]))
+            self.normal = normal
+            small = 1e-10           # to avoid to divide by 0
+            normal[0] += small      #
+            normal[1] += small      #
+            normal[2] += small      #
+            a = normal[0]
+            b = normal[1]
+            c = normal[2]
+            # Compute the thickness of the slice:
+            R = np.sqrt((4*np.pi*2.19**2)/(self.nx*self.ny))/2
+            # Plan equation:
+            self.im('   Search on the plan')
+            gind1,gind2 = [],[]
+            self.im('    -> Optimization of the search')
+            while len(gind1)+len(gind2) < 0.005*len(stagData.x):
+                gind1 = np.where(abs(a*stagData.x1+b*stagData.y1+c*stagData.z1) <= R)[0]
+                gind2 = np.where(abs(a*stagData.x2+b*stagData.y2+c*stagData.z2) <= R)[0]
+                R = R*1.2
+            self.Rfinal = R/1.2
+            self.im('    -> Final thickness of the pre-slice: '+str(R))
+            # Cut YY according to plan equation
+            x1,y1,z1,self.r1 = stagData.x1[gind1],stagData.y1[gind1],stagData.z1[gind1],stagData.r1[gind1]
+            self.theta1,self.phi1 = stagData.theta1[gind1],stagData.phi1[gind1]
+            x2,y2,z2,self.r2 = stagData.x2[gind2],stagData.y2[gind2],stagData.z2[gind2],stagData.r2[gind2]
+            self.theta2,self.phi2 = stagData.theta2[gind2],stagData.phi2[gind2]
+            if ftype == 'Scalar':
+                self.v1,self.v2 = stagData.v1[gind1],stagData.v2[gind2]
+                # empty
+                self.vx1,self.vy1, self.vz1, self.vr1 = stagData.vx1,stagData.vy1,stagData.vz1,stagData.vr1
+                self.vx2,self.vy2, self.vz2, self.vr2 = stagData.vx2,stagData.vy2,stagData.vz2,stagData.vr2
+                self.vtheta1, self.vphi1, self.P1 = stagData.vtheta1,stagData.vphi1,stagData.P1
+                self.vtheta2, self.vphi2, self.P2 = stagData.vtheta2,stagData.vphi2,stagData.P2
+            else:
+                self.v1,self.v2 = stagData.v1[gind1],stagData.v2[gind2] # norm
+                self.vx1,self.vy1,self.vz1,self.vr1 = stagData.vx1[gind1],stagData.vy1[gind1],stagData.vz1[gind1],stagData.vr1[gind1]
+                self.vx2,self.vy2,self.vz2,self.vr2 = stagData.vx2[gind2],stagData.vy2[gind2],stagData.vz2[gind2],stagData.vr2[gind2]
+                self.vtheta1,self.vphi1,self.P1 = stagData.vtheta1[gind1],stagData.vphi1[gind1],stagData.P1[gind1]
+                self.vtheta2,self.vphi2,self.P2 = stagData.vtheta2[gind2],stagData.vphi2[gind2],stagData.P2[gind2]
+            # Compute the normal vectors to the slicing plan:
+            self.normalu = np.array([1,-a/b,0])
+            self.normalv = np.array([a/b,1,-(a**2+b**2)/(c*b)])
+            self.normalw = np.array([a,b,c])
+            # Projection
+            self.im('   Projection on the plan')
+            self.x1 = np.dot(np.array([x1,y1,z1]).T,self.normalu)/np.linalg.norm(self.normalu)
+            self.y1 = np.dot(np.array([x1,y1,z1]).T,self.normalv)/np.linalg.norm(self.normalv)
+            self.z1 = np.dot(np.array([x1,y1,z1]).T,self.normalw)/np.linalg.norm(self.normalw)
+            self.x2 = np.dot(np.array([x2,y2,z2]).T,self.normalu)/np.linalg.norm(self.normalu)
+            self.y2 = np.dot(np.array([x2,y2,z2]).T,self.normalv)/np.linalg.norm(self.normalv)
+            self.z2 = np.dot(np.array([x2,y2,z2]).T,self.normalw)/np.linalg.norm(self.normalw)
+            #stacking
+            self.stackyy(self.x1.shape[0],self.x2.shape[0],self.v1.shape[0],self.v2.shape[0])
+            
+            # Added by A.JANIN 24/03/22
+            # ----------------------------------------------
+            # --- Search the ideal number of points along the annulus
+            self.im('   - build ideal annulus geometry')
+            totSurf     = np.count_nonzero(stagData.layers == stagData.slayers[0])*2
+            opti_radius = np.sqrt(totSurf/(4*np.pi))
+            opti_peri   = int(2*np.pi*opti_radius)
+            opti_peri   = opti_peri * 1 # optimization
+
+            # --- Description of the new grid: the two axis
+            lon = np.linspace(0,2*np.pi,opti_peri)
+            R   = np.array(stagData.z_coords)+stagData.rcmb
+
+            # --- meshed grid
+            lon,R = np.meshgrid(lon,R)
+            lat   = lon.copy()*0
+
+            # --- Annulus grid: conversion to x,y (z = 0 here)
+            self.im('   - Compute the annulus')
+            xan = np.multiply(np.multiply(R,np.cos(lat)),np.cos(lon))
+            yan = np.multiply(np.multiply(R,np.cos(lat)),np.sin(lon))
+            zan = np.multiply(R,np.sin(lat))
+
+            # --- interpolation
+            self.im('   - interpolation on the annulus')
+            from scipy.interpolate import griddata
+            from time import time
+            points      = np.zeros((self.x.shape[0],3))
+            points[:,0] = self.x
+            points[:,1] = self.y
+            points[:,2] = self.z
+            self.im('     -> Number of data points: '+str(self.x.shape[0]))
+            self.im('     -> Number of new points:  '+str(xan.shape[0]*xan.shape[1]))
+            time0 = time()
+            self.v = griddata(points, self.v, (xan, yan, zan), method=interp_method)
+            if ftype == 'Vectorial':
+                self.vx = griddata(points, self.vx, (xan, yan, zan), method=interp_method)
+                self.vy = griddata(points, self.vy, (xan, yan, zan), method=interp_method)
+                self.vz = griddata(points, self.vz, (xan, yan, zan), method=interp_method)
+                self.vtheta = griddata(points, self.vtheta, (xan, yan, zan), method=interp_method)
+                self.vphi = griddata(points, self.vphi, (xan, yan, zan), method=interp_method)
+                self.vr = griddata(points, self.vr, (xan, yan, zan), method=interp_method)
+            time1 = time()
+            self.x = xan ; self.phi   = lon - np.pi
+            self.y = yan ; self.theta = lat
+            self.z = zan ; self.r     = R
+            #exit
+            self.im('Slicing done successfully!')
+            self.im('    -> Time for the interpolation: '+str(time1-time0))
+            # ----------------------------------------------
+        
+        if axis == 1 or axis == 'layer':
+            self.im('Extraction of a depth slice from a Yin Yang (i.e. axis=1)')
+            txt_layer = str(layer)
+            if layer not in stagData.slayers and layer not in list(range(-1,-len(stagData.slayers)-1,-1)):
+                raise StagUnknownLayerError(layer)
+            else:
+                layer = stagData.slayers[layer]
+                layer = np.where(np.array(stagData.slayers,dtype=np.int32)==layer)[0][0]
+            #Specific inheritance
+            self.r1 = stagData.r1.reshape(NxNy,Nz)[:,layer]
+            self.r2 = stagData.r2.reshape(NxNy,Nz)[:,layer]
+            #Creation of the SliceData object:
+            nod     = len(stagData.slayers)
+            NxNy    = int(len(stagData.r1)/nod)
+            radtemp = stagData.r1.reshape(NxNy,nod)
+            rad = [np.amax(radtemp[:,i]) for i in range(nod)]
+            self.layer = stagData.slayers[layer]
+            self.depth = stagData.depths[layer]
+            self.x1 = stagData.x1.reshape(NxNy,Nz)[:,layer]
+            self.y1 = stagData.y1.reshape(NxNy,Nz)[:,layer]
+            self.z1 = stagData.z1.reshape(NxNy,Nz)[:,layer]
+            self.r1 = stagData.r1.reshape(NxNy,Nz)[:,layer]
+            self.theta1 = stagData.theta1.reshape(NxNy,Nz)[:,layer]
+            self.phi1   = stagData.phi1.reshape(NxNy,Nz)[:,layer]
+            self.x2 = stagData.x2.reshape(NxNy,Nz)[:,layer]
+            self.y2 = stagData.y2.reshape(NxNy,Nz)[:,layer]
+            self.z2 = stagData.z2.reshape(NxNy,Nz)[:,layer]
+            self.r2 = stagData.r2.reshape(NxNy,Nz)[:,layer]
+            self.theta2 = stagData.theta2.reshape(NxNy,Nz)[:,layer]
+            self.phi2   = stagData.phi2.reshape(NxNy,Nz)[:,layer]
+            if ftype == 'Scalar':
+                self.v1   = stagData.v1.reshape(NxNy,Nz)[:,layer]
+                self.v2   = stagData.v2.reshape(NxNy,Nz)[:,layer]
+                # empty
+                self.vx1,self.vy1, self.vz1, self.vr1 = stagData.vx1,stagData.vy1,stagData.vz1,stagData.vr1
+                self.vx2,self.vy2, self.vz2, self.vr2 = stagData.vx2,stagData.vy2,stagData.vz2,stagData.vr2
+                self.vtheta1, self.vphi1, self.P1 = stagData.vtheta1,stagData.vphi1,stagData.P1
+                self.vtheta2, self.vphi2, self.P2 = stagData.vtheta2,stagData.vphi2,stagData.P2
+            else:
+                self.vx1   = stagData.vx1.reshape(NxNy,Nz)[:,layer]
+                self.vx2   = stagData.vx2.reshape(NxNy,Nz)[:,layer]
+                self.vy1   = stagData.vy1.reshape(NxNy,Nz)[:,layer]
+                self.vy2   = stagData.vy2.reshape(NxNy,Nz)[:,layer]
+                self.vz1   = stagData.vz1.reshape(NxNy,Nz)[:,layer]
+                self.vz2   = stagData.vz2.reshape(NxNy,Nz)[:,layer]
+                self.vr1   = stagData.vr1.reshape(NxNy,Nz)[:,layer]
+                self.vr2   = stagData.vr2.reshape(NxNy,Nz)[:,layer]
+                self.vtheta1   = stagData.vtheta1.reshape(NxNy,Nz)[:,layer]
+                self.vtheta2   = stagData.vtheta2.reshape(NxNy,Nz)[:,layer]
+                self.vphi1     = stagData.vphi1.reshape(NxNy,Nz)[:,layer]
+                self.vphi2     = stagData.vphi2.reshape(NxNy,Nz)[:,layer]
+                self.P1   = stagData.P1.reshape(NxNy,Nz)[:,layer]
+                self.P2   = stagData.P2.reshape(NxNy,Nz)[:,layer]
+                self.v1   = stagData.v1.reshape(NxNy,Nz)[:,layer]  #norm
+                self.v2   = stagData.v2.reshape(NxNy,Nz)[:,layer]  #norm
+            #stacking
+            self.stackyy(self.x1.shape[0],self.x2.shape[0],self.v1.shape[0],self.v2.shape[0])
+            #exit
+            self.im('Extraction done successfully!')
+            self.im('    - layer        = '+txt_layer)
+            self.im('    - pts in slice = '+str(NxNy))
+    
+    
+    def locate_on_annulus_slicing(self,stagData,point,normal):
+        """
+        Extract an annulus-slice or a depth-slice in a stagData.StagYinYangGeometry object.
+        The annulus-slice is defined according to a normal vector, perpendicular to the slicing plan.
+        The detph-slice of defined according to the depth layer.
+        <i> : stagData = stagData.StagYinYangGeometry
+              normal   = list/array, (only if axis == 0), vector of coordinates corresponding
+                         to the normal to the plan containing the annlus.
+                         This definition is consistent with the normal of the slicing plan in the Paraview software!
+                         normal = (nx,ny,nz)
+                         Default: normal = (1,0,0)
+        """
+        self.im('Search the location of a point on an annulus slice')
+        lon,lat = point
+        #check the geometry:
+        if not isinstance(stagData,StagYinYangGeometry):
+            raise StagTypeError(str(type(stagData)),'stagData.StagYinYangGeometry')
+        # ---
+        self.im('Normal to the slicing plan: '+str(normal[0])+','+str(normal[1])+','+str(normal[2]))
+        self.normal = normal
+        small = 1e-10           # to avoid to divide by 0
+        normal[0] += small      #
+        normal[1] += small      #
+        normal[2] += small      #
+        a = normal[0]
+        b = normal[1]
+        c = normal[2]
+        # Plan equation:
+        from .stagCompute import get_xzy_scoords
+        xp,yp,zp = get_xzy_scoords(stagData,lon,lat,verbose=self.verbose)
+        # test if on the plan:
+        R = np.sqrt((4*np.pi*2.19**2)/(self.nx*self.ny))
+        self.im('   Search on the plan')
+        if abs(a*xp+b*yp+c*zp) > R:
+            msg = 'Points not on the annulus plan: unable to locate '
+            raise StagComputationalError(msg)
+        
+        # Compute the normal vectors to the slicing plan:
+        self.normalu = np.array([1,-a/b,0])
+        self.normalv = np.array([a/b,1,-(a**2+b**2)/(c*b)])
+        self.normalw = np.array([a,b,c])
+        # Projection
+        self.im('1. Projection on the plan')
+        x = np.dot(np.array([xp,yp,zp]).T,self.normalu)/np.linalg.norm(self.normalu)
+        y = np.dot(np.array([xp,yp,zp]).T,self.normalv)/np.linalg.norm(self.normalv)
+        z = np.dot(np.array([xp,yp,zp]).T,self.normalw)/np.linalg.norm(self.normalw)            
+        # ---
+        
+        self.im('2. Find the point on the regular annulus grid')
+        # --- Search the ideal number of points along the annulus
+        self.im('   - build ideal annulus geometry')
+        totSurf     = np.count_nonzero(stagData.layers == stagData.slayers[0])*2
+        opti_radius = np.sqrt(totSurf/(4*np.pi))
+        opti_peri   = int(2*np.pi*opti_radius)
+        opti_peri   = opti_peri * 5 # optimization
+        # --- Description of the new grid: the two axis
+        lon = np.linspace(0,2*np.pi,opti_peri)
+        R   = np.array(stagData.z_coords)+stagData.rcmb
+        # --- meshed grid
+        lon,R = np.meshgrid(lon,R)
+        lat   = lon.copy()*0
+        # --- Annulus grid: conversion to x,y (z = 0 here)
+        self.im('   - Compute the annulus')
+        xan = np.multiply(np.multiply(R,np.cos(lat)),np.cos(lon))
+        yan = np.multiply(np.multiply(R,np.cos(lat)),np.sin(lon))
+        zan = np.multiply(R,np.sin(lat))
+        # --- Find the nearest point
+        dist = np.sqrt((xan.flatten()-x)**2+(yan.flatten()-y)**2+(zan.flatten()-z)**2)
+        gind = np.where(dist == np.amin(dist))[0][0]
+        self.im('Point found!')
+        xf   = xan.flatten()[gind]
+        yf   = yan.flatten()[gind]
+        zf   = zan.flatten()[gind]
+        lonf = lon.flatten()[gind] - np.pi
+        latf = lat.flatten()[gind]
+        rf   = R.flatten()[gind]
+        self.im('   x   = '+str(xf))
+        self.im('   y   = '+str(yf))
+        self.im('   z   = '+str(zf))
+        self.im('   lon = '+str(lonf))
+        self.im('   lat = '+str(latf))
+        self.im('   r   = '+str(rf))
+        return xf,yf,zf,lonf,latf,rf
+
     
 
 
@@ -1221,7 +1545,7 @@ class CartesianSliceData(MainSliceData):
         self.P  = np.array([])        #Matrix of Pressure field for Cartesian grids
     
 
-    def sliceExtractor(self,stagData,axis=0,layer=0):
+    def slicing(self,stagData,axis=1,normal=[1,0,0],layer=-1,interp_method='nearest'):
         """
         Extract a depth slice in a stagData.StagCartesianGeometry object.
         As stagData.StagCartesianGeometry can have two different geometry, the slicing
@@ -1234,12 +1558,21 @@ class CartesianSliceData(MainSliceData):
             e.g. sliceExtractor(stagData,3,xy_axis=1) will make a slice on the cart2D stagData
             on axis 'y' (xy_axis=1), i.e. slice it on y=layer.
         <i> : stagData = stagData.StagCartesianGeometry
-              axis = int, slice direction according to:
-                    axis = 0  -> slice on x (x=layer,y=:,z=:)
-                    axis = 1  -> slice on y (x=:,y=layer,z=:)
-                    axis = 2  -> slice on z (x=:,y=:,z=layer)
-              layer    = int, index of the stagData layer that will be extracted in
+              axis = int, slice direction (defaut axis=1) according to:
+                    axis = 0    -> slice according to a plan          --| Spherical slicing
+                                   perpendicular to the given normal
+                    axis = 1 or axis = 'x'  -> slice on x     (x=layer,y=:,z=:)  --|
+                    axis = 2 or axis = 'y'  -> slice on y     (x=:,y=layer,z=:)    |-  Cartesian slicing
+                    axis = 3 or axis = 'z'  -> slice on z     (x=:,y=:,z=layer)  --|
+
+              normal   = list/array, (only if axis == 0), vector of coordinates corresponding
+                         to the normal to the plan containing the annlus (partial).
+                         normal = (nx,ny,nz)
+                         This definition is consistent with the normal of the slicing plan in the Paraview software!
+                         Default: normal = [1,0,0]
+              layer    = int, (only if axis >= 1), index of the stagData layer that will be extracted in
                          the new SliceData object.
+                         Default: layer = -1
         """
         self.im('Begin the slice extraction')
         self.axis  = axis
@@ -1261,7 +1594,7 @@ class CartesianSliceData(MainSliceData):
         #Slicing
         # ================== cart3D ==================
         if stagData.geometry == 'cart3D':
-            if axis == 0:
+            if axis == 1 or axis == 'x':
                 self.im('  - Slicing on axis 0, slice on x')
                 self.x = stagData.x[layer,:,:]
                 self.y = stagData.y[layer,:,:]
@@ -1274,7 +1607,7 @@ class CartesianSliceData(MainSliceData):
                     self.vz = stagData.vz[layer,:,:]
                     self.v = stagData.v[layer,:,:]
                     self.P = stagData.P[layer,:,:]
-            elif axis == 1:
+            elif axis == 2 or axis == 'y':
                 self.im('  - Slicing on axis 1, slice on y')
                 self.x = stagData.x[:,layer,:]
                 self.y = stagData.y[:,layer,:]
@@ -1287,7 +1620,7 @@ class CartesianSliceData(MainSliceData):
                     self.vz = stagData.vz[:,layer,:]
                     self.v = stagData.v[:,layer,:]
                     self.P = stagData.P[:,layer,:]
-            elif axis == 2:
+            elif axis == 3 or axis == 'z':
                 self.im('  - Slicing on axis 2, slice on z')
                 self.x = stagData.x[:,:,layer]
                 self.y = stagData.y[:,:,layer]
@@ -1300,6 +1633,115 @@ class CartesianSliceData(MainSliceData):
                     self.vz = stagData.vz[:,:,layer]
                     self.v = stagData.v[:,:,layer]
                     self.P = stagData.P[:,:,layer]
+            elif axis == 0:
+                self.im('Extraction of a slice along a plan defined by its normal (i.e. axis=0)')
+                self.im('   Normal to the slicing plan: '+str(normal[0])+','+str(normal[1])+','+str(normal[2]))
+                small = 1e-10           # to avoid to divide by 0
+                normal[0] += small      #
+                normal[1] += small      #
+                normal[2] += small      #
+                a = normal[0]
+                b = normal[1]
+                c = normal[2]
+                # Compute the thickness of the slice:
+                R = np.sqrt((4*np.pi*2.19**2)/(self.nx*self.ny))
+                # Plan equation:
+                self.im('   Search on the plan')
+                sdx = stagData.x.flatten()
+                sdy = stagData.y.flatten()
+                sdz = stagData.z.flatten()
+                # center the grid on 0,0,0
+                sdx = sdx - (np.amax(sdx)-np.amin(sdx))/2
+                sdy = sdy - (np.amax(sdy)-np.amin(sdy))/2
+                sdz = sdz - (np.amax(sdz)-np.amin(sdz))/2
+                #
+                gind = np.where(abs(a*sdx+b*sdy+c*sdz) <= R)[0]
+                if len(gind) == 0:
+                    self.im('******************************')
+                    self.im('*** WARNING ***')
+                    self.im('** -> No points crossing the slicing plan:')
+                    self.im('**    Maybe you have to reconsider the input normal vector')
+                    self.im('******************************')
+                # Cut YY according to plan equation
+                x,y,z = sdx[gind],sdy[gind],sdz[gind]
+                #self.xc,self.yc,self.zc = stagData.xc.flatten()[gind],stagData.yc.flatten()[gind],stagData.zc.flatten()[gind]
+                if ftype == 'Scalar':
+                    self.v = stagData.v.flatten()[gind]
+                    # empty
+                    self.vx,self.vy, self.vz = np.array([]),np.array([]),np.array([])
+                    self.P = np.array([])
+                else:
+                    self.v = stagData.v.flatten()[gind] # norm
+                    self.vx,self.vy,self.vz = stagData.vx.flatten()[gind],stagData.vy.flatten()[gind],stagData.vz.flatten()[gind]
+                    self.P    = stagData.P.flatten()[gind]
+                # Compute the normal vectors to the slicing plan:
+                self.normalu = np.array([1,-a/b,0])
+                self.normalv = np.array([a/b,1,-(a**2+b**2)/(c*b)])
+                self.normalw = np.array([a,b,c])
+                # Projection
+                self.im('   Projection on the plan')
+                self.x = np.dot(np.array([x,y,z]).T,self.normalu)/np.linalg.norm(self.normalu)
+                self.y = np.dot(np.array([x,y,z]).T,self.normalv)/np.linalg.norm(self.normalv)
+                self.z = np.dot(np.array([x,y,z]).T,self.normalw)/np.linalg.norm(self.normalw)
+                # Interpolate the slice on a new plan
+                # ----------------------------------------------
+                # --- Search the ideal number of points for the new grid
+                self.im('   - build a new cart2D geometry')
+
+                # --- Description of the new grid: the two axis
+                xnew = np.linspace(np.amin(self.x),np.amax(self.x),stagData.nx)
+                ynew = np.linspace(np.amin(self.y),np.amax(self.y),stagData.ny)
+
+                # --- meshed grid
+                xnew,ynew = np.meshgrid(xnew,ynew)
+                znew      = xnew.copy()*0
+
+                # --- interpolation
+                self.im('   - interpolation on the grid')
+                from scipy.interpolate import griddata
+                from time import time
+                points      = np.zeros((self.x.shape[0],3))
+                points[:,0] = self.x
+                points[:,1] = self.y
+                points[:,2] = self.z
+                self.im('     -> Number of data points: '+str(self.x.shape[0]))
+                self.im('     -> Number of new points:  '+str(xnew.shape[0]*xnew.shape[1]))
+                time0 = time()
+                self.v = griddata(points, self.v, (xnew, ynew, znew), method=interp_method)
+                if ftype == 'Vectorial':
+                    # projection
+                    self.vx   = np.dot(np.array([self.vx,self.vy,self.vz]).T,self.normalu)/np.linalg.norm(self.normalu)
+                    self.vy   = -np.dot(np.array([self.vx,self.vy,self.vz]).T,self.normalv)/np.linalg.norm(self.normalv) # minus because, plot with ax.invert_yaxis()
+                    self.vz   = np.dot(np.array([self.vx,self.vy,self.vz]).T,self.normalv)/np.linalg.norm(self.normalv)
+                    # interpolation
+                    self.vx = griddata(points, self.vx, (xnew, ynew, znew), method=interp_method)
+                    self.vy = griddata(points, self.vy, (xnew, ynew, znew), method=interp_method)
+                    self.vz = griddata(points, self.vz, (xnew, ynew, znew), method=interp_method)
+                time1 = time()
+                # Mask to remove the very distant points
+                self.im('   - remove ghost points')
+                distmin = np.sqrt((xnew[0][0]-xnew[1][1])**2+(ynew[0][0]-ynew[1][1])**2)
+                mask    = np.zeros(self.v.shape,dtype=bool)
+                for i in range(len(xnew)):
+                    for j in range(len(xnew[i])):
+                        dist = np.sqrt((xnew[i][j]-self.x)**2+(ynew[i][j]-self.y)**2)
+                        # dist min
+                        if np.amin(dist) >= distmin:
+                            mask[i][j] = True
+                # apply the mask:
+                self.v[mask] = np.nan
+                if ftype == 'Vectorial':
+                    self.vx[mask] = np.nan
+                    self.vy[mask] = np.nan
+                    self.vz[mask] = np.nan
+                self.x = xnew
+                self.y = ynew
+                self.z = znew
+                #exit
+                self.im('Slicing done successfully!')
+                self.im('    -> Time for the interpolation: '+str(time1-time0))
+                # ----------------------------------------------
+                
             else:
                 raise SliceAxisError(axis)
         # ================== cart2D ==================
@@ -1403,7 +1845,7 @@ class CartesianSliceData(MainSliceData):
         <i> : axis = int, index of dimension that have to be expanded
                         axis = 0    -> expand on x
                         axis = 1    -> expand on y
-                        axis = é    -> expand on z
+                        axis = 2    -> expand on z
         """
         self.x  = np.expand_dims(self.x,axis=axis)
         self.y  = np.expand_dims(self.y,axis=axis)
@@ -1419,8 +1861,247 @@ class CartesianSliceData(MainSliceData):
 
 
 
+class SphericalSliceData(MainSliceData):
+    """
+    Defines the structure of the SphericalSliceData object derived from MainSliceData type.
+    This object corresponds to a simplified StagSphericalGeometry object.
+    """
+    def __init__(self,geometry):
+        super().__init__()  # inherit all the methods and properties from MainSliceData
+        self.geometry = geometry
+        self.plan  = None  # If cartesian 2D, contains information of the plan as 'xy' or 'yz etc
+                           # self.plan != self.axis, self.plan describe plan where data are contained
+        self.x  = np.array([])        #Matrix of X coordinates meshed (in spherical shape)
+        self.y  = np.array([])        #Matrix of Y coordinates meshed (in spherical shape)
+        self.z  = np.array([])        #Matrix of Z coordinates meshed (in spherical shape)
+        self.xc = np.array([])        #Matrix of cartesian X coordinates meshed (in cartesian shape)
+        self.yc = np.array([])        #Matrix of cartesian Y coordinates meshed (in cartesian shape)
+        self.zc = np.array([])        #Matrix of cartesian Z coordinates meshed (in cartesian shape)
+        self.r     = np.array([])     #Matrice of spherical coordinates r
+        self.theta = np.array([])     #Matrice of spherical coordinates theta
+        self.phi   = np.array([])     #Matrice of spherical coordinates phi
+        # Scalar field
+        self.v = np.array([])         #Matrix of scalar field (or norm of velocity)
+        # vectorial field
+        self.vx = np.array([])        #Matrix of x-component of the velocity field for Cartesian grids
+        self.vy = np.array([])        #Matrix of y-component of the velocity field for Cartesian grids
+        self.vz = np.array([])        #Matrix of z-component of the velocity field for Cartesian grids
+        self.vtheta = np.array([])    #Matrix of theta component of the vectorial field
+        self.vphi   = np.array([])    #Matrix of phi component of the vectorial field
+        self.vr     = np.array([])    #Matrix of radial component of the vectorial field
+        self.P  = np.array([])        #Matrix of Pressure field for Cartesian grids
 
 
+
+    def slicing(self,stagData,axis=1,normal=[1,0,0],layer=-1):
+        """
+        Extract an annulus-slice or a depth-slice in a stagData.StagSphericalGeometry object.
+        The annulus-slice is defined according to a normal vector, perpendicular to the slicing plan.
+        The detph-slice of defined according to an axis (x,y or z) and the index of the layer.
+        NOTE: Note that this slicing routine works for both 3D spherical and annulus geometry except
+              for an annulus-slice! Indeed, an annulus-slice of an annulus will just produce
+              itself (for the best) but generally 2 disconected lines.
+              In the depth-slice case, a slice on an annulus will return a line.
+        In the case of a depth-slice, the slicing will reduce by 1 the dimension of the grid.
+        <i> : stagData = stagData.StagSphericalGeometry
+              axis = int, slice direction (defaut axis=1) according to:
+                    axis = 0 or axis = 'annulus -> slice according to a plan          --| Spherical slicing
+                                                   perpendicular to the given normal
+                    axis = 1 or axis = 'x'  -> slice on x     (x=layer,y=:,z=:)  --|
+                    axis = 2 or axis = 'y'  -> slice on y     (x=:,y=layer,z=:)    |-  Cartesian slicing
+                    axis = 3 or axis = 'z'  -> slice on z     (x=:,y=:,z=layer)  --|
+
+              normal   = list/array, (only if axis == 0), vector of coordinates corresponding
+                         to the normal to the plan containing the annlus (partial).
+                         normal = (nx,ny,nz)
+                         This definition is consistent with the normal of the slicing plan in the Paraview software!
+                         Default: normal = [1,0,0]
+              layer    = int, (only if axis >= 1), index of the stagData layer that will be extracted in
+                         the new SliceData object.
+        """
+        self.im('Begin the slice extraction')
+        self.axis  = axis
+        self.layer = layer
+        # -------
+        #check the type:
+        if not isinstance(stagData,StagSphericalGeometry):
+            raise StagTypeError(str(type(stagData)),'stagData.StagSphericalGeometry')
+        # field type:
+        ftype = stagData.fieldNature
+        if ftype == 'Scalar':
+            self.im('  - Scalar field detected')
+        else:
+            self.im('  - Vectorial field detected: '+str(stagData.flds.shape[0])+' fields')
+        # -------
+        #StagInheritance
+        self.sliceInheritance(stagData)
+        # -------
+        #Annulus plan
+        if self.geometry == 'annulus':
+            if stagData.x.shape[0] == 1:
+                self.im('  - Annulus data detected: plan yz')
+                self.plan = 'yz'
+            elif stagData.x.shape[1] == 1:
+                self.im('  - Annulus data detected: plan xz')
+                self.plan = 'xz'
+            elif stagData.x.shape[2] == 1:
+                self.im('  - Annulus data detected: plan xy')
+                self.plan = 'xy'
+        # -------
+        #Slicing
+        if axis == 0 or axis == 'annulus':
+            self.im('Extraction of an annulus slice (i.e. axis=0)')
+            self.im('   Normal to the slicing plan: '+str(normal[0])+','+str(normal[1])+','+str(normal[2]))
+            small = 1e-10           # to avoid to divide by 0
+            normal[0] += small      #
+            normal[1] += small      #
+            normal[2] += small      #
+            a = normal[0]
+            b = normal[1]
+            c = normal[2]
+            # Compute the thickness of the slice:
+            R = np.sqrt((4*np.pi*2.19**2)/(self.nx*self.ny))
+            # Plan equation:
+            self.im('   Search on the plan')
+            sdx = stagData.x.flatten()
+            sdy = stagData.y.flatten()
+            sdz = stagData.z.flatten()
+            gind = np.where(abs(a*sdx+b*sdy+c*sdz) <= R)[0]
+            if len(gind) == 0:
+                self.im('******************************')
+                self.im('*** WARNING ***')
+                self.im('** -> No points crossing the slicing plan:')
+                self.im('**    Maybe you have to reconsider the input normal vector')
+                self.im('******************************')
+            # Cut YY according to plan equation
+            x,y,z,self.r = sdx[gind],sdy[gind],sdz[gind],stagData.r.flatten()[gind]
+            self.theta,self.phi = stagData.theta.flatten()[gind],stagData.phi.flatten()[gind]
+            self.xc,self.yc,self.zc = stagData.xc   .flatten()[gind],stagData.yc.flatten()[gind],stagData.zc.flatten()[gind]
+            if ftype == 'Scalar':
+                self.v = stagData.v.flatten()[gind]
+                # empty
+                self.vx,self.vy, self.vz, self.vr = np.array([]),np.array([]),np.array([]),np.array([])
+                self.vtheta, self.vphi, self.P = np.array([]),np.array([]),np.array([])
+            else:
+                self.v = stagData.v.flatten()[gind] # norm
+                self.vx,self.vy,self.vz,self.vr = stagData.vx.flatten()[gind],stagData.vy.flatten()[gind],stagData.vz.flatten()[gind],stagData.vr.flatten()[gind]
+                self.vtheta,self.vphi,self.P    = stagData.vtheta.flatten()[gind],stagData.vphi.flatten()[gind],stagData.P.flatten()[gind]
+            # Compute the normal vectors to the slicing plan:
+            self.normalu = np.array([1,-a/b,0])
+            self.normalv = np.array([a/b,1,-(a**2+b**2)/(c*b)])
+            self.normalw = np.array([a,b,c])
+            # Projection
+            self.im('   Projection on the plan')
+            self.x = np.dot(np.array([x,y,z]).T,self.normalu)/np.linalg.norm(self.normalu)
+            self.y = np.dot(np.array([x,y,z]).T,self.normalv)/np.linalg.norm(self.normalv)
+            self.z = np.dot(np.array([x,y,z]).T,self.normalw)/np.linalg.norm(self.normalw)
+    
+        elif axis == 1 or axis == 'x':
+            self.im('  - Slicing on axis 1, slice on x')
+            self.x  = stagData.x[layer,:,:]
+            self.y  = stagData.y[layer,:,:]
+            self.z  = stagData.z[layer,:,:]
+            self.xc = stagData.xc[layer,:,:]
+            self.yc = stagData.yc[layer,:,:]
+            self.zc = stagData.zc[layer,:,:]
+            self.r     = stagData.r[layer,:,:]
+            self.theta = stagData.theta[layer,:,:]
+            self.phi   = stagData.phi[layer,:,:]
+            if ftype == 'Scalar':
+                self.v = stagData.v[layer,:,:]
+            else:
+                self.vx = stagData.vx[layer,:,:]
+                self.vy = stagData.vy[layer,:,:]
+                self.vz = stagData.vz[layer,:,:]
+                self.v = stagData.v[layer,:,:]
+                self.P = stagData.P[layer,:,:]
+                self.vtheta = stagData.vtheta[layer,:,:]
+                self.vphi   = stagData.vphi[layer,:,:]
+                self.vr     = stagData.vr[layer,:,:]
+        elif axis == 2 or axis == 'y':
+            self.im('  - Slicing on axis 2, slice on y')
+            self.x  = stagData.x[:,layer,:]
+            self.y  = stagData.y[:,layer,:]
+            self.z  = stagData.z[:,layer,:]
+            self.xc = stagData.xc[:,layer,:]
+            self.yc = stagData.yc[:,layer,:]
+            self.zc = stagData.zc[:,layer,:]
+            self.r     = stagData.r[:,layer,:]
+            self.theta = stagData.theta[:,layer,:]
+            self.phi   = stagData.phi[:,layer,:]
+            if ftype == 'Scalar':
+                self.v = stagData.v[:,layer,:]
+            else:
+                self.vx = stagData.vx[:,layer,:]
+                self.vy = stagData.vy[:,layer,:]
+                self.vz = stagData.vz[:,layer,:]
+                self.v = stagData.v[:,layer,:]
+                self.P = stagData.P[:,layer,:]
+                self.vtheta = stagData.vtheta[:,layer,:]
+                self.vphi   = stagData.vphi[:,layer,:]
+                self.vr     = stagData.vr[:,layer,:]
+        elif axis == 3 or axis == 'z':
+            self.im('  - Slicing on axis 3, slice on z')
+            self.x  = stagData.x[:,:,layer]
+            self.y  = stagData.y[:,:,layer]
+            self.z  = stagData.z[:,:,layer]
+            self.xc = stagData.xc[:,:,layer]
+            self.yc = stagData.yc[:,:,layer]
+            self.zc = stagData.zc[:,:,layer]
+            self.r     = stagData.r[:,:,layer]
+            self.theta = stagData.theta[:,:,layer]
+            self.phi   = stagData.phi[:,:,layer]
+            if ftype == 'Scalar':
+                self.v = stagData.v[:,:,layer]
+            else:
+                self.vx = stagData.vx[:,:,layer]
+                self.vy = stagData.vy[:,:,layer]
+                self.vz = stagData.vz[:,:,layer]
+                self.v = stagData.v[:,:,layer]
+                self.P = stagData.P[:,:,layer]
+                self.vtheta = stagData.vtheta[:,:,layer]
+                self.vphi   = stagData.vphi[:,:,layer]
+                self.vr     = stagData.vr[:,:,layer]
+        else:
+            raise SliceAxisError(axis)
+        # -------
+        #Squeezing and sort: remove useless dimension
+        if self.geometry == 'annulus' and axis in [1,2,3]:
+            if self.plan == 'yz' or self.plan == 'zy':
+                self.im('  - Sorting grid accroding to phi direction')
+                self.phi   = np.squeeze(self.phi)
+                self.theta = np.squeeze(self.theta)
+                sort_list = np.argsort(self.phi)
+            elif self.plan == 'xz' or self.plan == 'zx':
+                self.im('  - Sorting grid accroding to theta direction')
+                self.theta = np.squeeze(self.theta)
+                self.phi   = np.squeeze(self.phi)
+                sort_list = np.argsort(self.theta)
+            else:
+                print('WARRNING - Strange plan for annulus...')
+            # apply sorting
+            self.theta = self.theta[sort_list]
+            self.phi   = self.phi[sort_list]
+            self.x  = np.squeeze(self.x)[sort_list]
+            self.y  = np.squeeze(self.y)[sort_list]
+            self.z  = np.squeeze(self.z)[sort_list]
+            self.xc = np.squeeze(self.xc)[sort_list]
+            self.yc = np.squeeze(self.yc)[sort_list]
+            self.zc = np.squeeze(self.zc)[sort_list]
+            self.r     = np.squeeze(self.r)[sort_list]
+            if ftype == 'Scalar':
+                self.v = np.squeeze(self.v)[sort_list]
+            else:
+                self.vx = np.squeeze(self.vx)[sort_list]
+                self.vy = np.squeeze(self.vy)[sort_list]
+                self.vz = np.squeeze(self.vz)[sort_list]
+                self.v = np.squeeze(self.v)[sort_list]
+                self.P = np.squeeze(self.P)[sort_list]
+                self.vtheta = np.squeeze(self.vtheta)[sort_list]
+                self.vphi   = np.squeeze(self.vphi)[sort_list]
+                self.vr     = np.squeeze(self.vr)[sort_list]
+        #exit
+        self.im('Slicing done successfully!')
 
 
 
@@ -1440,10 +2121,18 @@ class SliceData():
             return YinYangSliceData()
         elif geometry == 'cart2D' or geometry == 'cart3D':
             return CartesianSliceData(geometry)
+        elif geometry == 'spherical':
+            return SphericalSliceData(geometry)
         elif geometry == 'annulus':
-            raise GridGeometryInDevError(geometry)
+            #raise GridGeometryInDevError(geometry)
+            return SphericalSliceData(geometry)
         else:
             raise InputGridGeometryError(geometry)
+
+
+
+
+
 
 
 
@@ -1455,9 +2144,18 @@ class InterpolatedSliceData(MainSliceData):
     """
     def __init__(self):
         super().__init__()  # inherit all the methods and properties from MainSliceData
+        # geometry:
+        self.geom = ''      # Will be: 'rsg' ...
+        # cartesian grid
         self.x = []         #Matrix of X coordinates meshed
         self.y = []         #Matrix of Y coordinates meshed
         self.z = []         #Matrix of Z coordinates meshed
+        # natural geographical grid
+        self.lon = []       #Matrix of Longitude coordinates (in deg)
+        self.lat = []       #Matrix of Latitude coordinates (in deg)
+        self.r   = []       #Matrix of Depth/Elevation coordinates
+        self.theta = []
+        self.phi   = []
         # Scalar field
         self.v = []         #Matrix of scalar field
         # Vectorial field
@@ -1475,11 +2173,47 @@ class InterpolatedSliceData(MainSliceData):
         self.nyi = 0        #Number of point in the y direction in the inteprolated grid
         self.nzi = 0        #Number of point in the z direction in the inteprolated grid
         # interpolation parameters:
-        self.interpGeom   = ''          # Defined during the interpolation: indicates the type of geometry used for the new grid
-        self.spacing      = ''          # Defined during the interpolation: parameter of the interpGeom
-        self.interpMethod = ''          # Defined during the interpolation: method used for the interpolation
-        self.deg          = False       # Defined during the interpolation: bool, for interpGeom == 'rgS' only ! if deg is True, then the
-                                        # x,y,z on output will be lon,lat,r repsectivelly
+        self.interpGeom   = None          # Defined during the interpolation: indicates the type of geometry used for the new grid
+        self.spacing      = None          # Defined during the interpolation: parameter of the interpGeom
+        self.innerradius  = None          # Defined during the interpolation: CMB radius
+        self.outerradius  = None          # Defined during the interpolation: surface radius
+        self.ntheta       = None          # Defined during the interpolation: number of points in the theta direction
+        self.nz           = None          # Defined during the interpolation: number of points in the z (r) direction
+        self.interpMethod = None          # Defined during the interpolation: method used for the interpolation
+
+    
+    def convert_to_stagData(self):
+        """
+        Return a stagData object with an annulus geometry
+        """
+        if self.interpGeom == 'rgA':
+            # Creat the object
+            sd = StagData(geometry='annulus')
+            sd.geometry = 'annulus'
+            sd.plan     = 'xy'
+            sd.nx0 = 0   # Mean that the stagData object come from a convertion or is handmade
+            sd.nx = self.nx
+            sd.ny = self.ny
+            sd.nz = self.nz
+            sd.x  = np.expand_dims(self.x,2)
+            sd.y  = np.expand_dims(self.y,2)
+            sd.z  = np.expand_dims(self.z,2)
+            sd.xc = []
+            sd.yc = []
+            sd.zc = []
+            sd.r     = np.expand_dims(self.r,2)
+            sd.theta = np.expand_dims(self.theta,2)
+            sd.phi   = np.expand_dims(self.phi,2)
+            sd.v  = np.expand_dims(self.v,2)
+            if self.fieldNature == 'Vectorial':
+                sd.vx = np.expand_dims(self.vx,2)
+                sd.vy = np.expand_dims(self.vy,2)
+                sd.vz = np.expand_dims(self.vz,2)
+                sd.vtheta = np.expand_dims(self.vtheta,2)
+                sd.vphi   = np.expand_dims(self.vphi,2)
+                sd.vr     = np.expand_dims(self.vr,2)
+                sd.P  = np.expand_dims(self.P,2)
+        return sd
 
 
 
@@ -1497,7 +2231,7 @@ class MainCouldStagData:
         """
         # ----- Generic ----- #
         self.pName = 'cloudStagData'
-        self.verbose  = False           #Condition on the verbose output
+        self.verbose  = True           #Condition on the verbose output
         self.path     = ''              #The path to the stag file
         self.gfname   = ''              #Generic File name of the stag file
         self.cfname   = ''              #Current file name of the stag file (open on a drop)
@@ -1505,7 +2239,7 @@ class MainCouldStagData:
         self.indices  = None            #List of all indicies
         self.ibegin   = None            #First index
         self.iend     = None            #Last index
-        self.step     = None            #File index step
+        self.istep    = None            #File index step
         self.nt       = 0               #Length of self.indicies
         self.ci       = -1              #Current index of self.indicies load on the cloud
                                         #if self.ci = -1, mean that nothing is contain in the cloud drop
@@ -1561,10 +2295,12 @@ class MainCouldStagData:
             raise intstringError()
     
 
-    def build(self,gpath,gfname,resampling=[1,1,1],verbose=False,\
+    def build(self,gpath,gfname,resampling=[1,1,1],beginIndex=-1, endIndex=-1,verbose=True,\
               indices=[],ibegin=None,iend=None,istep=1):
         """
         Build the Cloud data
+        resampling, beginIndex, endIndex and verbose input parameters correspond to the
+        same one in StagData.stagImport()
         """
         # -- Path and file
         self.gpath       = gpath
@@ -1572,24 +2308,27 @@ class MainCouldStagData:
         self.resampling  = resampling
         # -- Geometry
         self.geometry    = _temp.geometry
+        # -- Layers
+        self.beginIndex = beginIndex
+        self.endIndex   = endIndex
         # -- indices
         if len(indices) == 0 and np.logical_or(ibegin==None,iend==None):
             raise CloudBuildIndexError
         elif len(indices) == 0:
-            self.ibegin = ibegin
-            self.iend   = iend
-            self.step   = step
-            self.indices = list(range(ibegin,iend,step))
+            self.ibegin  = ibegin
+            self.iend    = iend
+            self.istep   = istep
+            self.indices = list(range(ibegin,iend,istep))
         else:
             self.indices = indices
             self.ibegin  = indices[0]
             self.iend    = indices[-1]
-            self.step    = 1
+            self.istep   = 1
         self.nt = len(self.indices)
         self.verbose = verbose
         # -- Initiate
-        self.simuAge = np.empty(self.nt)*np.nan
-        self.ti_step = np.empty(self.nt)*np.nan
+        self.simuAge = np.empty(self.nt)
+        self.ti_step = np.empty(self.nt)
     
 
     def iterate(self):
@@ -1603,7 +2342,8 @@ class MainCouldStagData:
         # --- Build the drop
         self.drop = StagData(geometry=self.geometry)
         self.drop.verbose = self.verbose
-        self.drop.stagImport(self.gpath, self.cfname, resampling=self.resampling)
+        self.drop.stagImport(self.gpath, self.cfname, resampling=self.resampling,\
+                             beginIndex=self.beginIndex, endIndex=self.endIndex)
         self.drop.stagProcessing()
         # --- Fill Cloud field
         self.simuAge[self.ci] = self.drop.simuAge
@@ -1620,16 +2360,18 @@ class MainCouldStagData:
         self.ti_step = np.empty(self.nt)*np.nan
 
     
-    def stag2VTK(self):
+    def cloud2VTK(self,fname,multifile=False,timepar=1,path='./',creat_pointID=False,extended_verbose=True):
         """
+        timepar = int, defines the unit of time in the .xdmf file.
+                  Have a look in pypstag.stagVTK.stagCloud2timeVTU documentation for more details
         """
-        self.bin = self.verbose
-        self.verbose = True
         self.im('Requested: Build VTK from StagCloudData object')
-        self.verbose = self.bin
         if self.geometry == 'cart2D' or self.geometry == 'annulus':
             raise VisuGridGeometryError(self.geometry,'cart3D or yy')
-        return 1
+        else:
+            from pypStag.stagVTK import stagCloud2timeVTU
+            stagCloud2timeVTU(fname,self,multifile=multifile,timepar=timepar,path=path,\
+                              creat_pointID=creat_pointID,verbose=self.verbose,extended_verbose=extended_verbose)
 
 
 
@@ -1652,7 +2394,7 @@ class CartesianCloudData(MainCouldStagData):
         self.plan  = None  # If cartesian 2D, contain information of the plan as 'xy' or 'yz etc
     
 
-    def spacetimeMap(self,layer=-1,plotparam=None,timepar=0,aspect_ratio=1):
+    def spacetimeMap(self,axis=0,layer=-1,plotparam=None,timepar=0,aspect_ratio=1):
         """
         timepar = 0, time axis = file number
         timepar = 1, time axis = simuAge
@@ -1660,7 +2402,7 @@ class CartesianCloudData(MainCouldStagData):
         """
         self.im('Prepare a Space-Time diagram')
         from .stagViewer import spaceTimeDiagram
-        spaceTimeDiagram(self,layer=layer,timepar=timepar,\
+        spaceTimeDiagram(self,axis=axis,layer=layer,timepar=timepar,\
                      plotparam=plotparam,aspect_ratio=aspect_ratio)
 
 
@@ -1668,9 +2410,20 @@ class SphericalCloudData(MainCouldStagData):
     """
     Defines the structure of the SphericalCloudData object derived from MainCouldStagData type.
     """
-    def __init__(self):
+    def __init__(self,geometry):
         super().__init__()  # inherit all the methods and properties from MainCouldStagData
-        self.geometry = 'spherical'
+        self.geometry = geometry
+    
+    def spacetimeMap(self,axis=0,layer=-1,plotparam=None,timepar=0,aspect_ratio=1):
+        """
+        timepar = 0, time axis = file number
+        timepar = 1, time axis = simuAge
+        timepar = 2, time axis = ti_step
+        """
+        self.im('Prepare a Space-Time diagram')
+        from .stagViewer import spaceTimeDiagram
+        spaceTimeDiagram(self,axis=axis,layer=layer,timepar=timepar,\
+                     plotparam=plotparam,aspect_ratio=aspect_ratio)
 
 
 
@@ -1695,7 +2448,8 @@ class StagCloudData():
         elif geometry == 'spherical':
             return SphericalCloudData()
         elif geometry == 'annulus':
-            raise GridGeometryInDevError(geometry)
+            #raise GridGeometryInDevError(geometry)
+            return SphericalCloudData(geometry)
         else:
             raise InputGridGeometryError(geometry)
 

@@ -14,6 +14,10 @@ class PypStagError(Exception):
     pass
 
 
+class ParsingError(PypStagError):
+    """When error during the parsing"""
+    def __init__(self, badFile, msg):
+        super().__init__(badFile, msg)
 
 
 class PackageWarning(PypStagError):
@@ -49,6 +53,14 @@ class InputGridGeometryError(PypStagError):
              'the allowed geometries supported by stagData object.')
 
 
+class InputGridGeometryError_Viewer(PypStagError):
+    """Raised when stagData.import have a wrong input geometry"""
+    def __init__(self,geom):
+        super().__init__('Error on the input geometry!\n'+\
+             "The input geometry '"+geom+"' of your pypStag.StagData object\n"+\
+             'is not supported by the visualization package of pypStag.')
+        
+
 class CloudBuildIndexError(PypStagError):
     """Raised when stagCloudData have a wrong index input"""
     def __init__(self,geom):
@@ -69,7 +81,7 @@ class FieldTypeInDevError(PypStagError):
     def __init__(self,fieldType):
         super().__init__('Error on the input stagData.fieldType !\n'+\
              "The input fieldType '"+fieldType+"' is not supported now\n"+\
-             'in the current versin of pypStag... Be patient and take a coffee !')
+             'in the current versin of pypStag... Be patient and take a coffee!')
 
 
 class GridGeometryError(PypStagError):
@@ -144,6 +156,41 @@ class MetaCheckFieldUnknownError(PypStagError):
              str(allowedFields))
 
 
+class StagMapFieldError(PypStagError):
+    """Raised when field is incoherent with stagData in stagMap"""
+    def __init__(self,waitedField,gridGeom,stagType):
+        super().__init__("Error in input 'field' value\n"+\
+            'This value is incoherent regarding the input stagData object.\n'+\
+            'This can be due to confusion between current grid geometry and field type.\n'+\
+            'Waited value of field: '+waitedField+'\n'+\
+            'For grid geometry: '+gridGeom+'\n'+\
+            'For stagData field: '+stagType)
+
+
+class StagMapUnknownFieldError(PypStagError):
+    """Raised when unknown field in stagMap"""
+    def __init__(self,ifield,gridGeom,stagType):
+        super().__init__("Error in input 'field' value\n"+\
+            'Unknow field type: '+ifield)
+
+
+class StagUnknownLayerError(PypStagError):
+    """Raised when unknown layer is asked"""
+    def __init__(self,unknownlayer):
+        super().__init__("Error! The selected layer: "+str(unknownlayer)+"\n"+\
+            'is absent from the input stagData.slayers list')
+
+
+class StagComputationalError(PypStagError):
+    """ Generic form numerical errors """
+    def __init__(self,message):
+        super().__init__("Error!\n"+message)
+
+class StagOptionInDevError(PypStagError):
+    """ Errors from option not yet implemented"""
+    def __init__(self):
+        super().__init__("Error!\n"+"The option you ask is not yet implemented..."+"\n"+\
+              '... Be patient and take a coffee!')
 
 
 

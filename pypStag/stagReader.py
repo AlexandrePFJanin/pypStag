@@ -3,46 +3,15 @@
 Created on Wed Jan 30 16:23:18 2019
 
 @author: Alexandre Janin
+-----------------------------
+@reading routing of binary files: adapted from the package Stagpy developed by Adrien Morison
+ -> See the Stagpy doc here: https://github.com/StagPython/StagPy
 """
 
 from functools import partial
 import numpy as np
 from itertools import product
-
-
-class StagpyError(Exception):
-
-    """Base class for exceptions raised by StagPy.
-
-    Note:
-        All exceptions derive from this class. To catch any error that might be
-        raised by StagPy due to invalid requests/missing data, you only need to
-        catch this exception.
-    """
-
-    pass
-
-
-class ParsingError(StagpyError):
-
-    """Raised when a parsing error occurs."""
-
-    def __init__(self, faulty_file, msg):
-        """Initialization of instances:
-
-        Args:
-            faulty_file (pathlike): path of the file where a parsing problem
-                was encountered.
-            msg (str): error message.
-
-        Attributes:
-            file (pathlike): path of the file where a parsing problem was
-                encountered.
-            msg (str): error message.
-        """
-        self.file = faulty_file
-        self.msg = msg
-        super().__init__(faulty_file, msg)
+from .stagError import ParsingError
 
 
 def _readbin(fid, fmt='i', nwords=1, file64=False, unpack=True):

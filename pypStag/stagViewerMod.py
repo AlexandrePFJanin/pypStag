@@ -10,18 +10,25 @@ Created on Wed Sep 9 09:32:14 2020
 This script contains stagViewer mod for efficient plots
 """
 
-
-
+from matplotlib.colors import ListedColormap
+import matplotlib
+import cartopy.crs as ccrs
 
 
 class PlotParam:
     """
     Class defining generic plot parameters that can be used automatically
     """
-    def __init__(self,fignum=0,title='',suptitle='',xlabel='',ylabel='',figsize=(7,7),show=True,\
-                 log10=False,nol=20,maxVal='Default',minVal='Default',\
-                 cmap='vik',reverseCMAP=False,\
-                 save=False,path='Default',name='preview.png',format='Default',dpi=500):
+    def __init__(self,fignum=0,title='',suptitle='',xlabel='',ylabel='',figsize=(7,7),show=True,aspect_ratio=1,aspect=None,\
+                 projection=ccrs.Robinson(),transform=ccrs.PlateCarree(),gridlines=True,mapticks=True,\
+                 antialiased=False,\
+                 linecolor='black',linewidth=1,\
+                 vscale=None,arrow_width=None,qscale=10,noa=1000,\
+                 cbar=True,cbar_location='bottom',cbar_axis=None,cbar_shrink=0.8,cbar_pad=0.05,cbar_aspect=30,cbar_label=None,\
+                 log10=False,nol=20,vmax=None,vmin=None,s=5,lw=1.25,edgecolor=None,\
+                 cmap='vik',reverseCMAP=False,alpha=1,\
+                 save=False,path='Default',name='preview.png',format='Default',dpi=500,\
+                 rticks=False,theta_ticks=110):
         import pathlib
         #general figure parameters
         self.fignum   = fignum     # index of the figure
@@ -29,6 +36,15 @@ class PlotParam:
         self.suptitle = suptitle   # superior title of the figure
         self.figsize  = figsize    # size of the figure
         self.show     = show       # if True show the figure else close the figure (plt.close(fig))
+        self.aspect_ratio = aspect_ratio # aspect ratio of the figure
+        self.aspect   = aspect     # in ['equal',None]
+        # mapping and projection
+        self.projection = projection
+        self.transform  = transform  # ccrs.Geodetic() or ccrs.PlateCarree()   [default: ccrs.PlateCarree()]
+        self.gridlines  = gridlines
+        self.mapticks   = mapticks   # bool, if you want to display geo ticks on your map
+        # rendering
+        self.antialiased = antialiased
         # x/y label parametrisation
         self.xlabel      = xlabel     # label on x axis
         self.ylabel      = ylabel     # label on y axis
@@ -36,26 +52,52 @@ class PlotParam:
         self.size_label  = 7
         self.xlabel_rotation = None
         self.ylabel_rotation = None
+        # ticks
+        self.rticks   = rticks      # Bool, If you want to display radial ticks on polar plot
+        self.theta_ticks = theta_ticks # int/float, *DEGREES* angle to represent the ticks in an annulus plot
         #field parameters
         self.log10   = log10      # if True plot the np.log10 of the field
         self.nol     = nol        # number of levels
-        self.maxVal  = maxVal     # upper limit for the color map
-        self.minVal  = minVal     # lower limit for the color map
+        self.vmax    = vmax       # upper limit for the color map
+        self.vmin    = vmin       # lower limit for the color map
         #color map parameters
         self.crameri_path = '/home/alexandre/Alexandre/Ptoleme/cpt/ScientificColourMaps4/'
         if cmap == 'vik':         #path of the cmap of GCMT
-            self.cmap = self.crameri_path + 'vik/vik.cpt'
+            self.cmap     = self.crameri_path + 'vik/vik.cpt'
+            self.cmaptype = 'cmap'
         elif cmap == 'oslo':
-            self.cmap = self.crameri_path + 'oslo/oslo.cpt'
+            self.cmap     = self.crameri_path + 'oslo/oslo.cpt'
+            self.cmaptype = 'cmap'
+        elif isinstance(cmap,ListedColormap):
+            self.cmap     = cmap
+            self.cmaptype = 'matplotlib'
+        else:
+            self.cmap     = cmap
+            self.cmaptype = 'perso'
         self.reverseCMAP = reverseCMAP  # if True will reverse the color map
+        # arrows
+        self.noa         = noa         # number of arrows
+        self.vscale      = vscale
+        self.arrow_width = arrow_width
+        self.qscale      = qscale
+        # scatter plot parameter
+        self.s  = s         # size of points
+        self.lw = lw        # linewidth parameter
+        self.edgecolor = edgecolor # edgecolor of point
+        self.alpha = alpha
+        #
+        self.linewidth = linewidth
+        self.linecolor = linecolor
         #color bar position
-        self.cbar_orientation ='vertical'
-        self.cbar_position = 'right'  #can be 'top','bottom','right','left'
-        self.cbar_size = '5%'
-        self.cbar_pad = 0.05
-        self.cbar_labelsize = 6
-        self.cbar_label = ''
-        self.cbar_drawedges = False
+        self.cbar = cbar
+        self.cbar_axis = cbar_axis # [left, bottom, width, height]
+        self.cbar_orientation ='horizontal'
+        self.cbar_location = cbar_location  #can be 'top','bottom','right','left'
+        self.cbar_shrink = cbar_shrink
+        self.cbar_pad = cbar_pad
+        self.cbar_aspect = cbar_aspect
+        self.cbar_labelsize = 10
+        self.cbar_label = cbar_label
         #export parameters
         self.save      = save     # if True save the figure with the export parameters
         if path == 'Default':     # path for the exported file
@@ -86,9 +128,21 @@ class PlotParam:
         """
         #cmap shortcuts managments
         if self.cmap == 'vik':         #path of the cmap of GCMT
-            self.cmap        = self.crameri_path + 'vik/vik.cpt'
+            self.cmap     = self.crameri_path + 'vik/vik.cpt'
+            self.cmaptype = 'cmap'
+        elif self.cmap == 'lajolla':
+            self.cmap     = self.crameri_path + 'lajolla/lajolla.cpt'
+            self.cmaptype = 'cmap'
+        elif self.cmap == 'davos':
+            self.cmap     = self.crameri_path + 'davos/davos.cpt'
+            self.cmaptype = 'cmap'
         elif self.cmap == 'oslo':
-            self.cmap        = self.crameri_path + 'oslo/oslo.cpt'
+            self.cmap     = self.crameri_path + 'oslo/oslo.cpt'
+            self.cmaptype = 'cmap'
+        elif isinstance(self.cmap,ListedColormap):
+            self.cmaptype = 'matplotlib'
+        else:
+            self.cmaptype = 'perso'
         #exporting format managment
         if self.format == 'Default':
             self.format = self.name.split('.')[1] # format of the file (default: extracted from the name)

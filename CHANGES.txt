@@ -5,6 +5,17 @@ pypStag
 
 
 -----------------
+commit 08/02/2023
+	version 0.5: general update: new stable version!
+
+
+-----------------
+commit 03/12/2021
+	version 0.3: general update
+
+
+
+-----------------
 commit 07/01/2020
 	stagData:
 		add SphericalCloudData
