@@ -10,6 +10,7 @@ Several Jupyter Notebook are provided to show you how to use the different featu
 
 To install pypStag in Development mode (advised):
 	0.1 first of all, install pip: https://pypi.org/project/pip/
+
         0.2 [*optional*] uninstall a previous version of pypStag
 		pip uninstall pypStag
 	1. in a terminal, entrer into the directory of pypStag
@@ -17,7 +18,7 @@ To install pypStag in Development mode (advised):
 		pip install -e ./
 	   pip will managed all dependencies and refered correctly pypStag in our default python
 	3. to check the installation of pypStag 
-	        >> pip show pypStag
+		pip show pypStag
 
 
 .. image:: ./bins/icons/pypStag_logographie_texte.png
