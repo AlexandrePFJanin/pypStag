@@ -92,7 +92,7 @@ class MainStagObject:
               """
         self.im('Reading and resampling: '+fname)
         # - Autocompletion of the path
-        if directory[-1] is not '/':
+        if directory[-1] != '/':
             directory += '/'
         self.path  = Path(directory+fname) #creat a Path object
         self.fname = fname
