@@ -1,4 +1,4 @@
-pypStag 0.5
+pypStag 0.7
 ======
 
 pypStag is a python package for managing StagYY outputs. This package offers you an efficient solution for basic reading/processing operations and is associated with a complete visualization package for 2D and 3D representation of your StagYY data.

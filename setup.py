@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
    name='pypStag',
-   version='0.5.0',
+   version='0.7.0',
    author='Alexandre JANIN',
    author_email='alexandre.janin@protonmail.com',
    packages=['pypStag'],
