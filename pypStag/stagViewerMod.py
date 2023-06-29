@@ -21,13 +21,13 @@ class PlotParam:
     """
     def __init__(self,fignum=0,title='',suptitle='',xlabel='',ylabel='',figsize=(7,7),show=True,aspect_ratio=1,aspect=None,\
                  projection=ccrs.Robinson(),transform=ccrs.PlateCarree(),gridlines=True,mapticks=True,\
-                 antialiased=False,\
+                 antialiased=False,tight_layout=False,\
                  linecolor='black',linewidth=1,\
-                 vscale=None,arrow_width=None,qscale=10,noa=1000,\
+                 vscale=None,arrow_width=None,qscale=10,noa=1000,acolor='black',\
                  cbar=True,cbar_location='bottom',cbar_axis=None,cbar_shrink=0.8,cbar_pad=0.05,cbar_aspect=30,cbar_label=None,\
                  log10=False,nol=20,vmax=None,vmin=None,s=5,lw=1.25,edgecolor=None,\
                  cmap='vik',reverseCMAP=False,alpha=1,\
-                 save=False,path='Default',name='preview.png',format='Default',dpi=500,\
+                 save=False,path='Default',fname='preview.png',format='Default',dpi=500,\
                  rticks=False,theta_ticks=110):
         import pathlib
         #general figure parameters
@@ -38,6 +38,7 @@ class PlotParam:
         self.show     = show       # if True show the figure else close the figure (plt.close(fig))
         self.aspect_ratio = aspect_ratio # aspect ratio of the figure
         self.aspect   = aspect     # in ['equal',None]
+        self.tight_layout = tight_layout
         # mapping and projection
         self.projection = projection
         self.transform  = transform  # ccrs.Geodetic() or ccrs.PlateCarree()   [default: ccrs.PlateCarree()]
@@ -80,6 +81,7 @@ class PlotParam:
         self.vscale      = vscale
         self.arrow_width = arrow_width
         self.qscale      = qscale
+        self.acolor      = acolor
         # scatter plot parameter
         self.s  = s         # size of points
         self.lw = lw        # linewidth parameter
@@ -104,7 +106,7 @@ class PlotParam:
             self.path  = str(pathlib.Path.cwd())+'/' #set the current path of the run
         else:
             self.path  = path 
-        self.name      = name     # name (with extension) of the file generated
+        self.fname     = fname     # name (with extension) of the file generated
         self.format    = format
         self.dpi       = dpi      # dots per inches
         #ticks parameters
@@ -145,12 +147,14 @@ class PlotParam:
             self.cmaptype = 'perso'
         #exporting format managment
         if self.format == 'Default':
-            self.format = self.name.split('.')[1] # format of the file (default: extracted from the name)
+            self.format = self.fname.split('.')[1] # format of the file (default: extracted from the name)
+        """
         else:
-            if len(self.name.split('.')) > 1: #means that the file name already contains an extension
-                self.name = self.name.split('.')[0]+self.format #add the good format
+            if len(self.fname.split('.')) > 1: #means that the file name already contains an extension
+                self.fname = self.fname.split('.')[0]+self.format #add the good format
             else: #means that the user didn't give a file name with format extension
-                self.name += self.format
+                self.fname += self.format
+        """
         # ========================== If axis is given in input: 
         if axis != None:
             self.set_ticks(axis)

@@ -13,10 +13,13 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from .stagReader import fields, reader_time, reader_rprof, reader_plates_analyse
-from .stagError import NoFileError, InputGridGeometryError, GridGeometryError, GridGeometryInDevError, \
+from .stagComputeMod import velocity_pole_projecton, ecef2enu_stagYY, rotation_matrix_3D, \
+                            xyz2latlon
+from .stagError import NoFileError, InputGridGeometryError, GridGeometryError, fieldTypeError, \
                        MetaCheckFieldUnknownError, MetaFileInappropriateError, FieldTypeInDevError, \
                        VisuGridGeometryError, StagTypeError, CloudBuildIndexError, SliceAxisError, \
-                       IncoherentSliceAxisError, StagUnknownLayerError, StagComputationalError
+                       IncoherentSliceAxisError, StagUnknownLayerError, StagComputationalError,\
+                       GridGeometryIncompatibleError, StagBaseError, fieldNatureError
 
 
 
@@ -221,7 +224,7 @@ class MainStagObject:
             new_z_coords.append(ztemp[ind])
             new_slayers.append(self.slayers[ind])    #Follows self.z_coord
         self.z_coords = new_z_coords
-        self.slayers = new_slayers
+        self.slayers = np.array(new_slayers)
         
         #Update the geometrical variable defining the grid
         self.nx  = len(self.x_coords)
@@ -284,6 +287,16 @@ class MainStagObject:
             self.fieldType = 'Vorticity'
         elif ''.join(n[0:4]) == 'prot':
             self.fieldType = 'Prot'
+        elif ''.join(n[0:3]) == 'prm':
+            self.fieldType = 'Prm'
+        elif ''.join(n[0:4]) == 'defm':
+            self.fieldType = 'Deformation Mode'
+        elif ''.join(n[0:2]) == 'gs':
+            self.fieldType = 'Grain Size'
+        elif ''.join(n[0:1]) == 'h':    ############## TEMPORARY ADDED A.JANIN 01.06.21 #################
+            self.fieldType = 'Healing'
+        elif ''.join(n[0:2]) == 'sy':   ############## TEMPORARY ADDED A.JANIN 01.06.21 #################
+            self.fieldType = 'Yield Stress'
         else:
             self.fieldType = 'Error: Undetermined'
             raise FieldTypeInDevError(fname)
@@ -297,7 +310,7 @@ class MainStagObject:
         self.im('Reading and resampling operations done!')
     
 
-    def stag2VTU(self,fname=None,path='./',ASCII=False,creat_pointID=False,verbose=True):
+    def stag2VTU(self,fname=None,path='./',ASCII=False,return_only=False,creat_pointID=False,verbose=True):
             """ Extension of the stagVTK package, directly available on stagData !
             This function creat '.vtu' or 'xdmf/h5' file readable with Paraview to efficiently 
             visualize 3D data contain in a stagData object. This function works directly
@@ -327,7 +340,11 @@ class MainStagObject:
                 self.im('Automatic file name attribution: '+fname)
             #Importation of the stagVTK package
             from .stagVTK import stag2VTU
-            stag2VTU(fname,self,path,ASCII=ASCII,creat_pointID=creat_pointID,verbose=verbose)
+            if not return_only:
+                stag2VTU(fname,self,path,ASCII=ASCII,creat_pointID=creat_pointID,return_only=return_only,verbose=verbose)
+            else:
+                Points,ElementNumbers,vstack,pointID = stag2VTU(fname,self,path,ASCII=ASCII,creat_pointID=creat_pointID,return_only=return_only,verbose=verbose)
+                return Points,ElementNumbers,vstack,pointID
     
     
 
@@ -801,10 +818,353 @@ class StagYinYangGeometry(MainStagObject):
         # == Processing Finish !
         self.im('Processing of stag data done!')
     
+    
+    def splitGird(self):
+        """ This function split the loaded grid (x->x1+x2,
+        for instance and do the operation for x, y, z, r,
+        theta and phi)"""
+        nYin     = len(self.x1)
+        nYinYang = len(self.x)
+        self.x1 = self.x[0:nYin]
+        self.x2 = self.x[nYin:nYinYang]
+        self.y1 = self.y[0:nYin]
+        self.y2 = self.y[nYin:nYinYang]
+        self.z1 = self.z[0:nYin]
+        self.z2 = self.z[nYin:nYinYang]
+        self.r1 = self.r[0:nYin]
+        self.r2 = self.r[nYin:nYinYang]
+        self.theta1 = self.theta[0:nYin]
+        self.theta2 = self.theta[nYin:nYinYang]
+        self.phi1 = self.phi[0:nYin]
+        self.phi2 = self.phi[nYin:nYinYang]
 
+    
+    def mergeGird(self):
+        """ This function merge the loaded sub-grids (x1+x2->x,
+        for instance and do the operation for x, y, z, r, theta
+        and phi)"""
+        self.x = np.stack((self.x1,self.x2)).reshape(2*len(self.x1))
+        self.y = np.stack((self.y1,self.y2)).reshape(2*len(self.x1))
+        self.z = np.stack((self.z1,self.z2)).reshape(2*len(self.x1))
+        self.r = np.stack((self.r1,self.r2)).reshape(2*len(self.x1))
+        self.theta = np.stack((self.theta1,self.theta2)).reshape(2*len(self.x1))
+        self.phi = np.stack((self.phi1,self.phi2)).reshape(2*len(self.x1))
+    
+    
+    def splitFields(self):
+        """ This function split the loaded fields on the all mesh (v and if available, vx, vy, vz,
+        vphi, vtheta, vr and P) into the Yin-Yang subgrid: v1, v2 (and vx1,vx2,vy1,vy2...)"""
+        self.im('Split the Yin-Yang fields to a field on the Yin gird and a field on the Yang grid (v->v1+v2)')
+        nYin     = len(self.v1)
+        nYinYang = len(self.v)
+        self.v1 = self.v[0:nYin]
+        self.v2 = self.v[nYin:nYinYang]
+        if self.fieldNature == 'Vectorial':
+            self.P1 = self.P[0:nYin]
+            self.P2 = self.P[nYin:nYinYang]
+            self.vx1 = self.vx[0:nYin]
+            self.vx2 = self.vx[nYin:nYinYang]
+            self.vy1 = self.vy[0:nYin]
+            self.vy2 = self.vy[nYin:nYinYang]
+            self.vz1 = self.vz[0:nYin]
+            self.vz2 = self.vz[nYin:nYinYang]
+            self.vr1 = self.vr[0:nYin]
+            self.vr2 = self.vr[nYin:nYinYang]
+            self.vtheta1 = self.vtheta[0:nYin]
+            self.vtheta2 = self.vtheta[nYin:nYinYang]
+            self.vphi1 = self.vphi[0:nYin]
+            self.vphi2 = self.vphi[nYin:nYinYang]
+    
+    
+    def mergeFields(self):
+        """ This function merge the loaded fields from the sub-meshes (Yin and Yang) to
+        the entire YY (Yin+Yang). i.e. merge v1+v2 -> v (and vx1+vx2->vx, vy1+vy2->vy ...
+        if vectorial)."""
+        self.im('Merge Yin and Yang fields (v1+v2->v)')
+        self.v       = np.stack((self.v1,self.v2)).reshape(2*len(self.v1))
+        if self.fieldNature == 'Vectorial':
+            self.vx      = np.stack((self.vx1,self.vx2)).reshape(2*len(self.v1))
+            self.vy      = np.stack((self.vy1,self.vy2)).reshape(2*len(self.v1))
+            self.vz      = np.stack((self.vz1,self.vz2)).reshape(2*len(self.v1))
+            self.P       = np.stack((self.P1,self.P2)).reshape(2*len(self.v1))
+            self.vtheta  = np.stack((self.vtheta1,self.vtheta2)).reshape(2*len(self.v1))
+            self.vphi    = np.stack((self.vphi1,self.vphi2)).reshape(2*len(self.v1))
+            self.vr      = np.stack((self.vr1,self.vr2)).reshape(2*len(self.v1))
+    
+    
+    def get_vprofile(self,field='v',lon=None,lat=None,x=None,y=None,z=None,phi=None,theta=None):
+        """ Extract a vertical profile in the loaded data according to the coordinates
+        of the intersection between the profile and shallowest layers (e.g the surface).
+        The coordinates of this point can be set in three different bases: (lon,lat), or
+        (theta,phi,[r is imposed to the shallowest loaded layer]) or (x,y,z).
+        Note. The returned profile is not interpolated. This function will search the
+        nearest point on the loaded grid for the profile.
+        
+        N.B. All the arguments are optional. However, is you set a longitude, a latitude
+            is expected and vice versa. The same for x where y and z are expected or phi
+            where theta is expected (and vice versa).
+            The priority order is (lon,lat)>(x,y,z)>(theta,phi) if several coordinates system
+            is set in input.
+        Args:
+            field (str, optionnal): String defining the field of the current class instance on which the
+                                    the user want to extract a vertical profile. This argument must be
+                                    in ['v' for scalar fields, 'vx', 'vy', 'vz', 'vr', 'vtheta', 'vphi',
+                                    or 'P' for vectorial fields]. Defaults to 'v'
+            lon (int/float, optional): longitude (in *DREGREE*) of the intersection between the profile
+                                    and the shallowest layer. Defaults to None.
+            lat (int/float, optional): latitude (in *DREGREE*) of the intersection between the profile
+                                    and the shallowest layer. Defaults to None.
+            x (int/float, optional): x coordinate of the intersection between the profile
+                                    and the shallowest layer. Defaults to None.
+            y (int/float, optional): y coordinate of the intersection between the profile
+                                    and the shallowest layer. Defaults to None.
+            z (int/float, optional): z coordinate of the intersection between the profile
+                                    and the shallowest layer. Defaults to None.
+            phi (int/float, optional): phi coordinate (in *RADIANS*) of the intersection between the profile
+                                    and the shallowest layer. Defaults to None.
+            theta (int/float, optional): theta coordinate (in *RADIANS*) of the intersection between the profile
+                                    and the shallowest layer. Defaults to None.
+        Outputs:
+            vprof (np.ndarray): Vector of size Nz containing the extracted vertical profile
+            coordinates (np.ndarray): Matrix (Nz,3) containing the true coordinates of the
+                                      profile points. If the user set a lon/lat coordinate in input,
+                                      returns (lon,lat,depths[km]) of the points. If the user set a
+                                      x,y,z coordinates, returns a coordinates matix alos in x,y,z.
+                                      Finally, if the user set a phi/theta coordinates to define the
+                                      profile, returns a coordinate matrix with r/theta/phi.
+        """
+        self.im('Vertical profile extraction')
+        Nz = self.slayers.shape[0]
+        NxNy = int(self.x.shape[0]/Nz)
+        compute = True
+        if lon is not None and lat is None:
+            raise StagBaseError('Longitude detected but the latitude is missing')
+        if lon is None and lat is not None:
+            raise StagBaseError('Latitude detected but the longitude is missing')
+        cartesianBase = 0
+        if x is not None:
+            cartesianBase += 1
+        if y is not None:
+            cartesianBase += 1
+        if z is not None:
+            cartesianBase += 1
+        if cartesianBase == 0 or cartesianBase == 3:
+            cartesianBaseComplete = True
+        else:
+            cartesianBaseComplete = False
+        if lon is None and lat is None and not cartesianBaseComplete:
+            raise StagBaseError('Uncomplete cartesian base detected: Please, set both x,y and z')
+        TPBase = 0
+        if theta is not None:
+            TPBase += 1
+        if phi is not None:
+            TPBase += 1
+        if TPBase == 0 or TPBase == 2:
+            TPBaseComplete = True
+        else:
+            TPBaseComplete = False
+        print(TPBase, TPBaseComplete)
+        if lon is None and lat is None and x is None and y is None and z is None and not TPBaseComplete:
+            raise StagBaseError('Uncomplete theta,phi base detected: Please, set both theta and phi (in radians)')
+        if lon is None and lat is None and x is None and y is None and z is None and theta is None and phi is None:
+            raise StagBaseError('No coordinate for the profile: Please set a surface coordinate for the profile!')
+        # ---
+        if lon is not None and lat is not None:
+            self.im('  -> Profile below:')
+            self.im('      - Longitude = '+str(lon)+' deg')
+            self.im('      - Latitude  = '+str(lat)+' deg')
+            LONg = self.phi.reshape((NxNy,Nz))*180/np.pi
+            LATg = -(self.theta.reshape((NxNy,Nz))*180/np.pi-90)
+            long = LONg[:,-1]
+            latg = LATg[:,-1]
+            dist = np.sqrt((long-lon)**2+(latg-lat)**2)
+            ids = np.where(dist==np.amin(dist))[0][0]
+            self.im('      - Nearest surface point index = '+str(ids))
+            coordinates = np.zeros((Nz,3))
+            coordinates[:,0] = LONg[ids,:]
+            coordinates[:,1] = LATg[ids,:]
+            coordinates[:,2] = self.depths
+            compute = False
+        elif compute and x is not None and y is not None and z is not None:
+            self.im('  -> Profile below:')
+            self.im('      - x = '+str(x))
+            self.im('      - y = '+str(y))
+            self.im('      - z = '+str(z))
+            Xg = self.x.reshape((NxNy,Nz))
+            Yg = self.y.reshape((NxNy,Nz))
+            Zg = self.z.reshape((NxNy,Nz))
+            xg = Xg[:,-1]
+            yg = Yg[:,-1]
+            zg = Zg[:,-1]
+            dist = np.sqrt((xg-x)**2+(yg-y)**2+(zg-z)**2)
+            ids = np.where(dist==np.amin(dist))[0][0]
+            self.im('      - Nearest surface point index = '+str(ids))
+            coordinates = np.zeros((Nz,3))
+            coordinates[:,0] = Xg[ids,:]
+            coordinates[:,1] = Yg[ids,:]
+            coordinates[:,2] = Zg[ids,:]
+            compute = False
+        elif compute and theta is not None and phi is not None:
+            self.im('  -> Profile below:')
+            self.im('      - theta = '+str(theta)+' rad')
+            self.im('      - phi   = '+str(phi)+' rad')
+            THETAg = self.theta.reshape((NxNy,Nz))
+            PHIg   = self.phi.reshape((NxNy,Nz))
+            thetag = THETAg[:,-1]
+            phig   = PHIg[:,-1]
+            dist = np.sqrt((thetag-theta)**2+(phig-phi)**2)
+            ids = np.where(dist==np.amin(dist))[0][0]
+            self.im('      - Nearest surface point index = '+str(ids))
+            coordinates = np.zeros((Nz,3))
+            coordinates[:,0] = self.r.reshape((NxNy,Nz))[ids,:]
+            coordinates[:,1] = THETAg[ids,:]
+            coordinates[:,2] = PHIg[ids,:]
+            compute = False
+        if field == 'v':
+            vprof = self.v.reshape((NxNy,Nz))[ids,:]
+        elif field == 'vx':
+            if self.fieldNature == 'Vectorial':
+                vprof = self.vx.reshape((NxNy,Nz))[ids,:]
+            else:
+                raise fieldNatureError('Vectorial')
+        elif field == 'vy':
+            if self.fieldNature == 'Vectorial':
+                vprof = self.vy.reshape((NxNy,Nz))[ids,:]
+            else:
+                raise fieldNatureError('Vectorial')
+        elif field == 'vz':
+            if self.fieldNature == 'Vectorial':
+                vprof = self.vz.reshape((NxNy,Nz))[ids,:]
+            else:
+                raise fieldNatureError('Vectorial')
+        elif field == 'vr':
+            if self.fieldNature == 'Vectorial':
+                vprof = self.vr.reshape((NxNy,Nz))[ids,:]
+            else:
+                raise fieldNatureError('Vectorial')
+        elif field == 'vtheta':
+            if self.fieldNature == 'Vectorial':
+                vprof = self.vtheta.reshape((NxNy,Nz))[ids,:]
+            else:
+                raise fieldNatureError('Vectorial')
+        elif field == 'vphi':
+            if self.fieldNature == 'Vectorial':
+                vprof = self.vphi.reshape((NxNy,Nz))[ids,:]
+            else:
+                raise fieldNatureError('Vectorial')
+        elif field == 'P':
+            if self.fieldNature == 'Vectorial':
+                vprof = self.P.reshape((NxNy,Nz))[ids,:]
+            else:
+                raise fieldNatureError('Vectorial')
+        return vprof,coordinates
 
+    
+    def set_pole_projection(self,rot,verbose=True):
+        """
+        Substract the rotation 'rot' defined by (wx,wy,wz) to the
+        entire velocity field, layer by layer.
+        """
+        self.im('Substract a rotation to the whole mantle velocity field')
+        if self.fieldType != 'Velocity':
+            raise fieldTypeError('Velocity')
+        else:
+            wx,wy,wz = rot
+            Nz = self.nz
+            NxNy = int(self.x.shape[0]/Nz)
+            # --- input data
+            x = self.x.reshape((NxNy,Nz))
+            y = self.y.reshape((NxNy,Nz))
+            z = self.z.reshape((NxNy,Nz))
+            vx = self.vx.reshape((NxNy,Nz))
+            vy = self.vy.reshape((NxNy,Nz))
+            vz = self.vz.reshape((NxNy,Nz))
+            # --- output data
+            vxo = np.zeros(x.shape)
+            vyo = np.zeros(x.shape)
+            vzo = np.zeros(x.shape)
+            vphio   = np.zeros(x.shape)
+            vthetao = np.zeros(x.shape)
+            vro   = np.zeros(x.shape)
+            # --- iteration on all layers
+            self.im('  -> Iterative computation on the %s layers'%str(self.nz))
+            for i in range(Nz):
+                if verbose:
+                    print('Works on the layer: '+str(i+1)+'/'+str(Nz))
+                xi = x[:,i]
+                yi = y[:,i]
+                zi = z[:,i]
+                vxi = vx[:,i]
+                vyi = vy[:,i]
+                vzi = vz[:,i]
+                # 
+                vxo[:,i], vyo[:,i], vzo[:,i], vphio[:,i], vthetao[:,i], vro[:,i] = velocity_pole_projecton(xi,yi,zi,vxi,vyi,vzi,wx,wy,wz)
+            # --- rewrite the current class instance fields
+            self.vx = vxo.reshape(NxNy*Nz)
+            self.vy = vyo.reshape(NxNy*Nz)
+            self.vz = vzo.reshape(NxNy*Nz)
+            self.vphi   = vphio.reshape(NxNy*Nz)
+            self.vtheta = vthetao.reshape(NxNy*Nz)
+            self.vr     = vro.reshape(NxNy*Nz)
+            self.splitFields()
+            self.im('Velocity reprojection: Done')
+    
+    
+    def grid_rotation(self,axis='x',theta='1*np.pi/180',R=None):
+        """
+        Function for the rotation of the grid defined as either (1) a rotation
+        around a given cartesian axis (x,y,z) or (2) as 3D rotation matrix
+        <i> : - axis, str,  in ['x','y','z']
+              - theta, int/float,  in  *RADIANS*
+              - R, np.ndarray, shape = 3x3
+        N.B. The rotation is applied on both the Yin and the Yang grid,
+             plus the merged grid and fields but not to the overlapping
+             mesh and fields.
+        """
+        if self.fieldNature == 'Scalar':
+            self.im('Rotation of the grid')
+        else:
+            self.im('Rotation of the grid and vectors')
+        if R is None:
+            self.im('  -> axis:  '+axis)
+            self.im('  -> theta: '+str(theta))
+            R = rotation_matrix_3D(axis,theta)
+        else:
+            self.im('  -> rotation matrix: '+str(R))
+        # ---
+        self.im('  -> Grid rotation:')
+        x = R[0,0]*self.x+R[0,1]*self.y+R[0,2]*self.z
+        y = R[1,0]*self.x+R[1,1]*self.y+R[1,2]*self.z
+        z = R[2,0]*self.x+R[2,1]*self.y+R[2,2]*self.z
+        self.x = x
+        self.y = y
+        self.z = z
+        self.theta, self.phi, self.r = xyz2latlon(self.x,self.y,self.z)
+        self.splitGird()
+        if self.fieldType == 'Velocity':
+            self.im('  -> Vectors rotation:')
+            vx = R[0,0]*self.vx+R[0,1]*self.vy+R[0,2]*self.vz
+            vy = R[1,0]*self.vx+R[1,1]*self.vy+R[1,2]*self.vz
+            vz = R[2,0]*self.vx+R[2,1]*self.vy+R[2,2]*self.vz
+            self.vx = vx
+            self.vy = vy
+            self.vz = vz
+            self.vphi, self.vtheta, self.vr = ecef2enu_stagYY(self.x,self.y,self.z,self.vx,self.vy,self.vz)
+            self.splitFields()
+        
 
+        
+    
 
+                        
+            
+            
+        
+            
+        
+        
+   
+    
     
 
 
@@ -2456,6 +2816,85 @@ class StagCloudData():
 
 
 
+
+
+class StagBookData():
+    """
+    Defines the structure of the StagBookData object.
+    """
+    def __init__(self):
+        super().__init__()  # inherit all the methods and properties from MainSliceData
+        # generic
+        self.pName   = 'stagBookData'
+        self.verbose = True
+        # geometry:
+        self.geom = ''      # Will be: 'rsg' ...
+        self.data = []      # list of the data that are loaded
+
+    def im(self,textMessage):
+        """Print verbose internal message. This function depends on the
+        argument of self.verbose. If self.verbose == True then the message
+        will be displayed on the terminal.
+        <i> : textMessage = str, message to display
+        """
+        if self.verbose == True:
+            print('>> '+self.pName+'| '+textMessage)
+
+    
+    def add_stagData(self,stagData):
+        """
+        """
+        if self.geom == '' or self.geom == stagData.geom:
+            if stagData.fieldType == 'Divergence':
+                self.div = stagData
+            elif stagData.fieldType == 'Vorticity':
+                self.vor = stagData
+            elif stagData.fieldType == 'Viscosity':
+                self.eta = stagData
+            elif stagData.fieldType == 'Temperature':
+                self.t = stagData
+            elif stagData.fieldType == 'Velocity':
+                self.vp = stagData
+            elif stagData.fieldType == 'Sigma max':
+                self.smax = stagData
+            elif stagData.fieldType == 'Damage':
+                self.dam = stagData
+            elif stagData.fieldType == 'Topography':
+                self.cs = stagData
+            elif stagData.fieldType == 'Density':
+                self.rho = stagData
+            elif stagData.fieldType == 'Lyapunov':
+                self.ly = stagData
+            elif stagData.fieldType == 'Stress':
+                self.str = stagData
+            elif stagData.fieldType == 'Poloidal':
+                self.pol = stagData
+            elif stagData.fieldType == 'Toroidal':
+                self.tor = stagData
+            elif stagData.fieldType == 'Strain Rate':
+                self.ed = stagData
+            elif stagData.fieldType == 'Composition':
+                self.c = stagData
+            elif stagData.fieldType == 'Melt Fraction':
+                self.f = stagData
+            elif stagData.fieldType == 'Age':
+                self.age = stagData
+            elif stagData.fieldType == 'Continents':
+                self.nrc = stagData
+            elif stagData.fieldType == 'Prot':
+                self.prot = stagData
+            else:
+                self.fieldType = 'Error: Undetermined'
+                raise FieldTypeInDevError(stagData.fname)
+            self.data.append(stagData.fieldType)
+            self.im('Data added to the current stagBookData instance: '+self.data[-1])
+        else:
+            raise GridGeometryIncompatibleError(stagData.geom,self.geom)
+    
+    def book2VTU(self):
+        """
+        """
+        return 0
 
 
 

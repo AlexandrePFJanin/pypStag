@@ -9,9 +9,13 @@ Created on Sun Feb 24 13:43:26 2019
 This script contains routines composing the pypStag Visualisation ToolKit
 """
 
+from .stagData import StagData
 from .stagError import *
 import numpy as np
 import h5py
+from scipy.spatial import ConvexHull
+from scipy.spatial import Delaunay
+
 
 
 
@@ -30,7 +34,7 @@ def im(textMessage,pName,verbose):
 
 
 
-def seal2VTU(fname,x,y,z,v,Nz,fieldName,path='./',ASCII=True,verbose=True):
+def scalar2VTU(fname,x,y,z,v,Nz,fieldName,path='./',ASCII=False,return_only=False,creat_pointID=False,verbose=True):
     """ This function creat '.vtu' file readable with Paraview to efficiently 
     visualize 3D data simply defined with grid matrix (x,y,z) and a field v 
     as well as a number of layer Nz.
@@ -44,14 +48,17 @@ def seal2VTU(fname,x,y,z,v,Nz,fieldName,path='./',ASCII=True,verbose=True):
           path      = str, path where you want to export your new .vtu file.
                       [Default: path='./']
           ASCII     = bool, if True, the .vtu file will be write in ASCII mode
-                      if not, in binary mode. [Default, ASCII=True]
+                      if not, in binary mode. [Default, ASCII=False]
           verbose   = bool, if True activates the verbose output
     """
-    pName = 'seal2VTU'
+    pName = 'scalar2VTU'
     if verbose:
         print()
-    im('Seal Visualization ToolKit',pName,verbose)
-    im('Requested: flatten 3D matrix -> .vtu',pName,verbose)
+    im('Scalar field Visualization ToolKit',pName,verbose)
+    if ASCII:
+        im('Requested: stagData -> .vtu',pName,verbose)
+    else:
+        im('Requested: stagData -> .xdmf + .h5',pName,verbose)
     im('    - Grid preparation',pName,verbose)
     # =======================================
     #Re-formating initial grids data
@@ -88,7 +95,6 @@ def seal2VTU(fname,x,y,z,v,Nz,fieldName,path='./',ASCII=True,verbose=True):
     Z_s    = Z[Nz-1]
     # =======================================
     # Triangulation of the surface using a convex hull algorithm
-    from scipy.spatial import ConvexHull
     points      = [[X_s[i],Y_s[i],Z_s[i]] for i in range(len(X_s))]
     triYingYang = ConvexHull(points).simplices # simple way to grid it
     # =========================================================================
@@ -119,16 +125,294 @@ def seal2VTU(fname,x,y,z,v,Nz,fieldName,path='./',ASCII=True,verbose=True):
     # ===================
     V_yy  = np.array(v).reshape(NxNy,Nz)
     vstack = list(V_yy.reshape((NxNy*Nz), order='F'))
-    im('    - Writing under .vtu format',pName,verbose)
-    __WriteVTU(fname,Points,ElementNumbers,vstack,fieldName,ASCII=ASCII,path=path)
-    im('Exportation done!',pName,verbose)
-    im('File: '+fname+'.vtu',pName,verbose)
+    # =========================================================================
+    mysd = StagData(geometry='cart3D')
+    mysd.fieldNature = 'Scalar'
+    mysd.fieldType   = fieldName
+    if creat_pointID:
+        im('      - Creat pointID',pName,verbose)
+        pointID = np.array(range(NxNy*Nz),dtype=np.int32).reshape(NxNy*Nz, order='F')        
+        pointID = pointID.reshape((NxNy*Nz), order='F')
+    else:
+        pointID = None
+    if not return_only:
+        # Exportation under VTKUnstructuredGrid format
+        if ASCII:
+            im('    - Writing under .vtu format',pName,verbose)
+        else:
+            im('    - Writing under .xdmf + .h5 formats',pName,verbose)
+        __writeVKTStag(fname,mysd,Points,ElementNumbers,vstack,ASCII=ASCII,path=path,pointID=pointID)
+        im('Exportation done!',pName,verbose)
+        if ASCII:
+            im('File: '+fname+'.vtu',pName,verbose)
+            im('Path: '+path,pName,verbose)
+        else:
+            im('Files: '+fname+'.xdmf + '+fname+'.h5',pName,verbose)
+            im('Path : '+path,pName,verbose)
+    else:
+        # Return all grid/mesh elements
+        return Points,ElementNumbers,vstack,pointID
 
 
 
 
 
-def cart2VTU(fname,x,y,z,v,Nx,Ny,Nz,fieldName,path='./',ASCII=True,verbose=True):
+def surface2VTK(x,y,z,v,fname,fieldName,Nz=1,path='./',verbose=True,simplex_threshold=0.02):
+    """ Function writting a Paraview VTK (XDMF+H5) file for a surface described by
+    3D (flatten) cartesian coordinates.
+
+    Args:
+        x (ndarray): x coordinates. Shape: flatten
+        y (ndarray): y coordinates. Shape: flatten
+        z (ndarray): z coordinates. Shape: flatten
+        v (ndarray): Field data. Shape: flatten
+        fname (str): Output filename without formati extension
+        fieldName (str): Name of the field (v) that will be displayed with Paraview
+        path (str, optional): Path to the output directory. Defaults to './'.
+        verbose (str, optional): Verbose option. Defaults to True.
+    """
+    pName = 'surface2VTK'
+    im('Exportation of 3D surface data points to meshed data for Paraview',pName,verbose)
+    
+    if path[-1] != '/':
+        path += '/'
+    
+    xdmf_file = fname + '.xdmf'
+    h5_file   = fname + '.h5'
+
+    nod = len(x)
+    points = np.zeros((nod,3))
+    points[:,0] = x
+    points[:,1] = y
+    points[:,2] = z
+
+    im('  -> Delaunay Triangulation',pName,verbose)
+    tri = Delaunay(points[:,0:2])
+    
+    # Simplification of the Delaunay triangulation: Remove long connections
+    simplices = tri.simplices
+    dist = np.zeros(simplices.shape)
+    mask = np.ones(simplices.shape[0],dtype=bool)
+    for i in range(simplices.shape[0]):
+        a,b,c = simplices[i,:]
+        dist[i,0] = np.sqrt((x[a]-x[b])**2+(y[a]-y[b])**2+(z[a]-z[b])**2)
+        dist[i,1] = np.sqrt((x[b]-x[c])**2+(y[b]-y[c])**2+(z[b]-z[c])**2)
+        dist[i,2] = np.sqrt((x[c]-x[a])**2+(y[c]-y[a])**2+(z[c]-z[a])**2)
+        if np.count_nonzero(dist[i,:]>simplex_threshold) > 0:
+            mask[i] = False
+
+    if np.unique(simplices[mask,:]).shape[0] == nod:
+        im('No point missed',pName,verbose)
+        simplices = simplices[mask,:]
+    else:
+        im('   * ERROR *',pName,verbose)
+        im('Process aborded!',pName,verbose)
+        im('Point(s) missed in the simplification of the Delaunay triangulation',pName,verbose)
+        im('  -> Reduce the argument simplex_threshold',pName,verbose)
+        return 0
+
+    im('  -> Writing the instruction file (XDMF)',pName,verbose)
+    fid = open(path+xdmf_file,'w')
+    fid.write('<?xml version="1.0" ?>'+'\n')
+    fid.write('<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>'+'\n')
+    fid.write('<Xdmf xmlns:xi="http://www.w3.org/2003/XInclude" Version="2.2">'+'\n')
+    fid.write('  <Domain>'+'\n')
+    fid.write('    <Grid GridType="Uniform">'+'\n')
+    fid.write('      <Topology TopologyType="Triangle" Dimensions="%s">'%int(simplices.shape[0])+'\n')
+    fid.write('        <DataItem Dimensions="%s'%int(simplices.shape[0])+' 3" NumberType="Int" Precision="8" Format="HDF">'+h5_file+':/Topology</DataItem>'+'\n')
+    fid.write('      </Topology>'+'\n')
+    fid.write('      <Geometry GeometryType="XYZ">'+'\n')
+    fid.write('        <DataItem Dimensions="%s 3" NumberType="Float" Precision="4" Format="HDF">'%x.shape[0]+h5_file+':/Geometry/Points</DataItem>'+'\n')
+    fid.write('      </Geometry>'+'\n')
+    fid.write('      <Attribute Name="'+fieldName+'" Active="1" AttributeType="None" Center="Node">'+'\n')
+    fid.write('        <DataItem Dimensions="%s" NumberType="Float" Precision="4" Format="HDF">'%x.shape[0]+h5_file+':/Node/field</DataItem>'+'\n')
+    fid.write('      </Attribute>'+'\n')
+    fid.write('    </Grid>'+'\n')
+    fid.write('  </Domain>'+'\n')
+    fid.write('</Xdmf>')
+    fid.close()
+
+    im('  -> Writing the data file (HDF5)',pName,verbose)
+    fid = h5py.File(path+h5_file,'w')
+    dset = fid.create_dataset('Topology', data = simplices)
+    dset = fid.create_dataset('/Geometry/Points', data = points)
+    dset = fid.create_dataset('/Node/field', data = v)
+    fid.close()
+
+    im('Process complete',pName,verbose)
+    im('Files generated:',pName,verbose)
+    im('  -> '+path+xdmf_file,pName,verbose)
+    im('  -> '+path+h5_file,pName,verbose)
+
+
+
+
+
+def vectorial2VTU(fname,x,y,z,v,Nz,path='./',ASCII=False,return_only=False,creat_pointID=False,verbose=True,\
+                  vect_topo_name='Cartesian Velocity',vect_geo_name='Spherical Velocity'):
+    """ This function creat '.vtu' file readable with Paraview to efficiently 
+    visualize 3D data simply defined with grid matrix (x,y,z) and a field v 
+    as well as a number of layer Nz.
+    <i> : fname     = str, name of the exported file without any extention
+          x         = list/numpy.ndarray, matrix of the cartesian x coordinates (flatten)
+          y         = list/numpy.ndarray, matrix of the cartesian y coordinates (flatten)
+          z         = list/numpy.ndarray, matrix of the cartesian z coordinates (flatten)
+          v         = list of numpy.ndarray representing the different component of your
+                      vectorial fields. The length of v can be either 3 or 6 
+                      according if you just enter the topocentric field (vx,vy,vz) or if you
+                      also entered the geodetic field (vr,vtheta,vphi).
+                            v = (vx,vy,vz)
+                        or  v = (vr,vtheta,vphi)
+                        or  v = (vx,vy,vz,vr,vtheta,vphi)
+                      numpy.ndarray, matrix of the field (flatten)
+          Nz        = int, dimension of the grid in the z direction, aka number of z layers
+          fieldName = str, name of the field for Paraview
+          path      = str, path where you want to export your new .vtu file.
+                      [Default: path='./']
+          ASCII     = bool, if True, the .vtu file will be write in ASCII mode
+                      if not, in binary mode. [Default, ASCII=False]
+          verbose   = bool, if True activates the verbose output
+    """
+    pName = 'scalar2VTU'
+    if verbose:
+        print()
+    im('Scalar field Visualization ToolKit',pName,verbose)
+    if ASCII:
+        im('Requested: stagData -> .vtu',pName,verbose)
+    else:
+        im('Requested: stagData -> .xdmf + .h5',pName,verbose)
+    im('    - Grid preparation',pName,verbose)
+    #
+    if len(v) == 3:
+        vx,vy,vz = v
+        im('    - 3 components detected',pName,verbose)
+    elif len(v) == 6:
+        vx,vy,vz,vr,vt,vp = v
+        im('    - 6 components detected',pName,verbose)
+    else:
+        print('The input list of velocity components have not the good shape. Have a look on the help of the function.')
+        return 0
+    # =======================================
+    #Re-formating initial grids data
+    X_yy  = np.array(x)
+    Y_yy  = np.array(y)
+    Z_yy  = np.array(z)
+    #reformating
+    Nz   = Nz                         #Number of depth layers
+    NxNy = int(len(x)/Nz)   #Number of points for each layers
+    x1    = X_yy.reshape(NxNy,Nz)
+    X_yy  = x1.tolist()
+    y1    = Y_yy.reshape(NxNy,Nz)
+    Y_yy  = y1.tolist()
+    z1    = Z_yy.reshape(NxNy,Nz)
+    Z_yy  = z1.tolist()
+    #Re-organisation of data to have X,Y and Z grid matrices organized by depths:
+    X = []
+    Y = []
+    Z = []
+    for j in range(Nz):
+        x1t = [x1[i][j] for i in range(NxNy)]
+        X.append(x1t)
+        y1t = [y1[i][j] for i in range(NxNy)]
+        Y.append(y1t)
+        z1t = [z1[i][j] for i in range(NxNy)]
+        Z.append(z1t)    
+    # =========================================================================
+    # 1) Take the surface of the 2 grids, patch together and triangulate
+    # =========================================================================
+    im('    - Triangulation on convex hull',pName,verbose)
+    # NotaBene: _s for the surface layer
+    X_s    = X[Nz-1]
+    Y_s    = Y[Nz-1]
+    Z_s    = Z[Nz-1]
+    # =======================================
+    # Triangulation of the surface using a convex hull algorithm
+    points      = [[X_s[i],Y_s[i],Z_s[i]] for i in range(len(X_s))]
+    triYingYang = ConvexHull(points).simplices # simple way to grid it
+    # =========================================================================
+    # 2) Create a 3D grid with tetrahedron elements
+    # =========================================================================
+    # Number all gridpoints we have
+    NUM         = np.array(range(0,NxNy*Nz))
+    NUMBER      = NUM.reshape((NxNy,Nz), order='F')
+    # Make a loop over all levels
+    ElementNumbers      = []
+    for iz in range(Nz-1):
+        num_upper      = NUMBER[:,iz+1]
+        num_lower      = NUMBER[:,iz]
+        num_tri = [[num_upper[t[0]], \
+                    num_upper[t[1]], \
+                    num_upper[t[2]], \
+                    num_lower[t[0]], \
+                    num_lower[t[1]], \
+                    num_lower[t[2]]] for t in triYingYang]
+        ElementNumbers.extend(num_tri)
+    # =======================================
+    # Convert data into correct vector format
+    im('    - Convert data into correct vector format',pName,verbose)
+    Points = [list(np.array(x1).reshape((NxNy*Nz), order='F')), \
+              list(np.array(y1).reshape((NxNy*Nz), order='F')), \
+              list(np.array(z1).reshape((NxNy*Nz), order='F'))]
+    Points = np.array(Points).transpose()
+    # ===================
+    VX = np.array(vx).reshape(NxNy,Nz)
+    VY = np.array(vy).reshape(NxNy,Nz)
+    VZ = np.array(vz).reshape(NxNy,Nz)
+    Vm = np.sqrt(VX**2+VY**2+VZ**2)    # magnitude will be stored in the pressure field
+    if len(v) == 3:
+        mysd = StagData(geometry='cart3D')
+        mysd.fieldNature = 'Vectorial'
+        mysd.fieldType   = 'bin'
+        vstack = (list(VX.reshape((NxNy*Nz), order='F')),\
+                list(VY.reshape((NxNy*Nz), order='F')),\
+                list(VZ.reshape((NxNy*Nz), order='F')),\
+                list(Vm.reshape((NxNy*Nz), order='F')))
+    elif len(v) == 6:
+        mysd = StagData(geometry='yy')
+        mysd.fieldNature = 'Vectorial'
+        mysd.fieldType   = 'bin'
+        VR = np.array(vr).reshape(NxNy,Nz)
+        VT = np.array(vt).reshape(NxNy,Nz)
+        VP = np.array(vp).reshape(NxNy,Nz)
+        vstack = (list(VX.reshape((NxNy*Nz), order='F')),\
+                list(VY.reshape((NxNy*Nz), order='F')),\
+                list(VZ.reshape((NxNy*Nz), order='F')),\
+                list(VR.reshape((NxNy*Nz), order='F')),\
+                list(VT.reshape((NxNy*Nz), order='F')),\
+                list(VP.reshape((NxNy*Nz), order='F')),\
+                list(Vm.reshape((NxNy*Nz), order='F')))
+        
+    # =========================================================================
+    if creat_pointID:
+        im('      - Creat pointID',pName,verbose)
+        pointID = np.array(range(NxNy*Nz),dtype=np.int32).reshape(NxNy,Nz)        
+        pointID = pointID.reshape((NxNy*Nz), order='F')
+    else:
+        pointID = None
+    if not return_only:
+        # Exportation under VTKUnstructuredGrid format
+        if ASCII:
+            im('    - Writing under .vtu format',pName,verbose)
+        else:
+            im('    - Writing under .xdmf + .h5 formats',pName,verbose)
+        __writeVKTStag(fname,mysd,Points,ElementNumbers,vstack,ASCII=ASCII,path=path,pointID=pointID,\
+                       vect_topo_name=vect_topo_name,vect_geo_name=vect_geo_name)
+        im('Exportation done!',pName,verbose)
+        if ASCII:
+            im('File: '+fname+'.vtu',pName,verbose)
+            im('Path: '+path,pName,verbose)
+        else:
+            im('Files: '+fname+'.xdmf + '+fname+'.h5',pName,verbose)
+            im('Path : '+path,pName,verbose)
+    else:
+        # Return all grid/mesh elements
+        return Points,ElementNumbers,vstack,pointID
+
+
+
+
+
+def cart2VTU(fname,x,y,z,v,Nx,Ny,Nz,fieldName,path='./',ASCII=False,verbose=True):
     """ This function creat '.vtu' file readable with Paraview to efficiently 
     visualize 3D data simply defined with grid matrix (x,y,z) and a field v 
     as well as a the dimension in each direction Nx, Ny and Nz.
@@ -200,10 +484,11 @@ def cart2VTU(fname,x,y,z,v,Nx,Ny,Nz,fieldName,path='./',ASCII=True,verbose=True)
 
 
 
-def stag2VTU(fname,stagData,path='./',ASCII=False,verbose=True,return_only=False,creat_pointID=False):
+def stag2VTU(fname,stagData,path='./',ASCII=False,verbose=True,return_only=False,creat_pointID=False,\
+             vect_topo_name='Velocity Cartesian',vect_geo_name='Velocity Spherical'):
     """ -- Geometry Adaptative Toolkit transforming stagData into VTU --
     This function creats readable file for Paraview for an efficient 
-    3D visualization of data contained in an input stagData instance.
+    3D visualization of data contain in an input stagData instance.
     This function works directly on a stagData input object and adapts the
     constuction of the triangulation according to this geometry. Furthermore
     stag2VTU is able to deal with vectorial and scalar fields. Outputs can be
@@ -260,275 +545,406 @@ def stag2VTU(fname,stagData,path='./',ASCII=False,verbose=True,return_only=False
     if path[-1] != '/':
         path += '/'
     #--------------
-    if stagData.geometry == 'cart3D' or stagData.geometry == 'spherical':
-        """
-        Adaptations for the exportation of the complete
-        stagData object with a 3D cartesian or spherical
-        geometries.
-        """
-        im('    - Grid preparation',pName,verbose)
-        # =======================================
-        #Re-formating initial grids data
-        Nx = len(stagData.x_coords)
-        Ny = len(stagData.y_coords)
-        Nz = len(stagData.slayers)
-        NxNy = Nx*Ny
-        x = np.array(stagData.x).reshape(NxNy*Nz, order='F')
-        y = np.array(stagData.y).reshape(NxNy*Nz, order='F')
-        z = np.array(stagData.z).reshape(NxNy*Nz, order='F')
-        v = np.array(stagData.v).reshape(NxNy*Nz, order='F')
-        # =========================================================================
-        # 1) Take the surface of the 2 grids, patch together and triangulate
-        # =========================================================================
-        im('    - Planar triangulation',pName,verbose)
-        # =======================================
-        #Computation of the triangulation of just a level of depth
-        triPlanar_simplices = triangulationPlanar(Nx,Ny,ordering='yx')
-        nod = len(triPlanar_simplices)
-        # =========================================================================
-        # 2) Create a 3D grid with tetrahedron elements
-        # =========================================================================
-        # Number all gridpoints we have
-        NUM         = np.array(range(0,NxNy*Nz))
-        NUMBER      = NUM.reshape((NxNy,Nz), order='F')
-        # Make a loop over all levels
-        ElementNumbers = np.zeros(((Nz-1)*nod,6),dtype=np.int32)
-        num_upper      = np.zeros(NxNy)
-        num_lower      = np.zeros(NxNy)
-        num_tri = np.zeros((nod,6))
-        for iz in range(Nz-1):
-            num_upper      = NUMBER[:,iz+1]
-            num_lower      = NUMBER[:,iz]
-            num_tri[:,0] = num_upper[triPlanar_simplices[:,0]]
-            num_tri[:,1] = num_upper[triPlanar_simplices[:,1]]
-            num_tri[:,2] = num_upper[triPlanar_simplices[:,2]]
-            num_tri[:,3] = num_lower[triPlanar_simplices[:,0]]
-            num_tri[:,4] = num_lower[triPlanar_simplices[:,1]]
-            num_tri[:,5] = num_lower[triPlanar_simplices[:,2]]
-            ElementNumbers[nod*iz:nod*(iz+1),:] = num_tri
-        # =======================================
-        # Convert data into correct vector format
-        im('    - Convert data into correct vector format',pName,verbose)
-        im('      - Grid',pName,verbose)
-        Points = np.zeros((NxNy*Nz,3))
-        Points[:,0] = np.array(x).reshape((NxNy*Nz), order='F')
-        Points[:,1] = np.array(y).reshape((NxNy*Nz), order='F')
-        Points[:,2] = np.array(z).reshape((NxNy*Nz), order='F')
-        # ===================
-        im('      - Field',pName,verbose)
-        if stagData.fieldNature == 'Scalar' or stagData.fieldNature == '':
-            V_yy  = np.array(v).reshape(NxNy,Nz, order='F')
-            vstack = V_yy.reshape((NxNy*Nz), order='F')
-        # ===================
-        if stagData.fieldNature == 'Vectorial':
-            if stagData.geometry == 'cart3D':
+    if stagData.slayers.shape[0] > 1:
+        im('Volumetric data detected (multiple depths): -> tetrahedralization',pName,verbose)
+        # --------------------
+        # Here below the routine to transform a multi-layers (multi-depths)
+        # stagData object into a VTU file readable with the sorftware Paraview.
+        #   -> N.B. We really make a distinction between creat a multi-layers
+        #           and a single (depth) layer file. Indeed, a multi-layers obj 
+        #           contains *volume* data that need to be tetrahedralized
+        #           whereas a single-layer obj containing 'only' surface data
+        #           that thus need 'only' to be triangulized.
+        # -------------------- 
+        if stagData.geometry == 'cart3D' or stagData.geometry == 'spherical':
+            """
+            Adaptations for the exportation of the complete
+            stagData object with a 3D cartesian or spherical
+            geometries.
+            """
+            im('    - Grid preparation',pName,verbose)
+            # =======================================
+            #Re-formating initial grids data
+            Nx = len(stagData.x_coords)
+            Ny = len(stagData.y_coords)
+            Nz = len(stagData.slayers)
+            NxNy = Nx*Ny
+            x = np.array(stagData.x).reshape(NxNy*Nz, order='F')
+            y = np.array(stagData.y).reshape(NxNy*Nz, order='F')
+            z = np.array(stagData.z).reshape(NxNy*Nz, order='F')
+            v = np.array(stagData.v).reshape(NxNy*Nz, order='F')
+            # =========================================================================
+            # 1) Take the surface of the 2 grids, patch together and triangulate
+            # =========================================================================
+            im('    - Planar triangulation',pName,verbose)
+            # =======================================
+            #Computation of the triangulation of just a level of depth
+            triPlanar_simplices = triangulationPlanar(Nx,Ny,ordering='yx')
+            nod = len(triPlanar_simplices)
+            # =========================================================================
+            # 2) Create a 3D grid with tetrahedron elements
+            # =========================================================================
+            # Number all gridpoints we have
+            NUM         = np.array(range(0,NxNy*Nz))
+            NUMBER      = NUM.reshape((NxNy,Nz), order='F')
+            # Make a loop over all levels
+            ElementNumbers = np.zeros(((Nz-1)*nod,6),dtype=np.int32)
+            num_upper      = np.zeros(NxNy)
+            num_lower      = np.zeros(NxNy)
+            num_tri = np.zeros((nod,6))
+            for iz in range(Nz-1):
+                num_upper      = NUMBER[:,iz+1]
+                num_lower      = NUMBER[:,iz]
+                num_tri[:,0] = num_upper[triPlanar_simplices[:,0]]
+                num_tri[:,1] = num_upper[triPlanar_simplices[:,1]]
+                num_tri[:,2] = num_upper[triPlanar_simplices[:,2]]
+                num_tri[:,3] = num_lower[triPlanar_simplices[:,0]]
+                num_tri[:,4] = num_lower[triPlanar_simplices[:,1]]
+                num_tri[:,5] = num_lower[triPlanar_simplices[:,2]]
+                ElementNumbers[nod*iz:nod*(iz+1),:] = num_tri
+            # =======================================
+            # Convert data into correct vector format
+            im('    - Convert data into correct vector format',pName,verbose)
+            im('      - Grid',pName,verbose)
+            Points = np.zeros((NxNy*Nz,3))
+            Points[:,0] = np.array(x).reshape((NxNy*Nz), order='F')
+            Points[:,1] = np.array(y).reshape((NxNy*Nz), order='F')
+            Points[:,2] = np.array(z).reshape((NxNy*Nz), order='F')
+            # ===================
+            im('      - Field',pName,verbose)
+            if stagData.fieldNature == 'Scalar' or stagData.fieldNature == '':
+                V_yy  = np.array(v).reshape(NxNy,Nz, order='F')
+                vstack = V_yy.reshape((NxNy*Nz), order='F')
+            # ===================
+            if stagData.fieldNature == 'Vectorial':
+                if stagData.geometry == 'cart3D':
+                    # ------ Vx ------
+                    V_vx  = np.array(stagData.vx).reshape(NxNy,Nz, order='F')
+                    vstackx = V_vx.reshape((NxNy*Nz), order='F')
+                    # ------ Vy ------
+                    V_vy  = np.array(stagData.vy).reshape(NxNy,Nz, order='F')
+                    vstacky = V_vy.reshape((NxNy*Nz), order='F')
+                    # ------ Vz ------
+                    V_vz  = np.array(stagData.vz).reshape(NxNy,Nz, order='F')
+                    vstackz = V_vz.reshape((NxNy*Nz), order='F')
+                    # ------ P ------
+                    V_vp  = np.array(stagData.P).reshape(NxNy,Nz, order='F')
+                    vstackp = V_vp.reshape((NxNy*Nz), order='F')
+                    # ------ stack ------
+                    vstack = (vstackx,vstacky,vstackz,vstackp)
+                elif stagData.geometry == 'spherical':
+                    # ------ Vx ------
+                    V_vx  = np.array(stagData.vx).reshape(NxNy,Nz, order='F')
+                    vstackx = V_vx.reshape((NxNy*Nz), order='F')
+                    # ------ Vy ------
+                    V_vy  = np.array(stagData.vy).reshape(NxNy,Nz, order='F')
+                    vstacky = V_vy.reshape((NxNy*Nz), order='F')
+                    # ------ Vz ------
+                    V_vz  = np.array(stagData.vz).reshape(NxNy,Nz, order='F')
+                    vstackz = V_vz.reshape((NxNy*Nz), order='F')
+                    # ------ Vr ------
+                    V_vr  = np.array(stagData.vr).reshape(NxNy,Nz, order='F')
+                    vstackr = V_vr.reshape((NxNy*Nz), order='F')
+                    # ------ Vtheta ------
+                    V_theta  = np.array(stagData.vtheta).reshape(NxNy,Nz, order='F')
+                    vstacktheta = V_theta.reshape((NxNy*Nz), order='F')
+                    # ------ Vphi ------
+                    V_phi  = np.array(stagData.vphi).reshape(NxNy,Nz, order='F')
+                    vstackphi = V_phi.reshape((NxNy*Nz), order='F')
+                    # ------ P ------
+                    V_vp  = np.array(stagData.P).reshape(NxNy,Nz, order='F')
+                    vstackp = V_vp.reshape((NxNy*Nz), order='F')
+                    # ------ stack ------
+                    vstack = (vstackx,vstacky,vstackz,vstackr,vstacktheta,vstackphi,vstackp)
+
+        elif stagData.geometry == 'yy':
+            """
+            Adaptations for the exportation of the complete
+            stagData object with a Yin-Yang geoemtry.
+            """
+            im('    - Grid preparation',pName,verbose)
+            # =======================================
+            #Re-formating initial grids data
+            Nz   = len(stagData.slayers)      #Number of depth layers
+            NxNy = int(len(stagData.x1)/Nz)   #Number of points for each layers
+            x1     = stagData.x1.reshape(NxNy,Nz)
+            x2     = stagData.x2.reshape(NxNy,Nz)
+            y1     = stagData.y1.reshape(NxNy,Nz)
+            y2     = stagData.y2.reshape(NxNy,Nz)
+            z1     = stagData.z1.reshape(NxNy,Nz)
+            z2     = stagData.z2.reshape(NxNy,Nz)
+            #Re-organisation of data to have X,Y and Z grid matrices organized by depths:
+            X = np.zeros((Nz,2*NxNy))
+            Y = np.zeros((Nz,2*NxNy))
+            Z = np.zeros((Nz,2*NxNy))
+            X[:,0:NxNy]      = x1.T
+            X[:,NxNy:2*NxNy] = x2.T
+            Y[:,0:NxNy]      = y1.T
+            Y[:,NxNy:2*NxNy] = y2.T
+            Z[:,0:NxNy]      = z1.T
+            Z[:,NxNy:2*NxNy] = z2.T
+            # =========================================================================
+            # 1) Take the surface of the 2 grids, patch together and triangulate
+            # =========================================================================
+            im('    - Triangulation on convex hull',pName,verbose)
+            # NotaBene: _s for the surface layer
+            X_s    = X[Nz-1]
+            Y_s    = Y[Nz-1]
+            Z_s    = Z[Nz-1]
+            # =======================================
+            # Triangulation of the surface using a convex hull algorithm
+            points = np.array([X_s,Y_s,Z_s]).T
+            triYingYang = ConvexHull(points).simplices # simple way to grid it
+            nod = triYingYang.shape[0]
+            # =========================================================================
+            # 2) Create a 3D grid with tetrahedron elements
+            # =========================================================================
+            # Number all gridpoints we have
+            NUM_1       = np.array(range(0,NxNy*Nz))
+            NUMBER_1    = NUM_1.reshape((NxNy,Nz), order='F')
+            NUMBER_2    = NUMBER_1 + NxNy*Nz
+            # -- Make a loop over all levels
+            # init all arrays
+            ElementNumbers = np.zeros(((Nz-1)*nod,6),dtype=np.int32)
+            num_upper      = np.zeros(NxNy*2)
+            num_lower      = np.zeros(NxNy*2)
+            num_tri = np.zeros((nod,6))
+            for iz in range(Nz-1):
+                num_upper[0:NxNy]      = NUMBER_1[:,iz+1]#np.array(list(num_upper1) + list(num_upper2))
+                num_upper[NxNy:NxNy*2] = NUMBER_2[:,iz+1]
+                num_lower[0:NxNy]      = NUMBER_1[:,iz]#np.array(list(num_upper1) + list(num_upper2))
+                num_lower[NxNy:NxNy*2] = NUMBER_2[:,iz]
+                num_tri[:,0] = num_upper[triYingYang[:,0]]
+                num_tri[:,1] = num_upper[triYingYang[:,1]]
+                num_tri[:,2] = num_upper[triYingYang[:,2]]
+                num_tri[:,3] = num_lower[triYingYang[:,0]]
+                num_tri[:,4] = num_lower[triYingYang[:,1]]
+                num_tri[:,5] = num_lower[triYingYang[:,2]]
+                ElementNumbers[nod*iz:nod*(iz+1),:] = num_tri 
+
+            # =======================================
+            # Convert data into correct vector format
+            im('    - Convert data into correct vector format:',pName,verbose)
+            im('      - Grid',pName,verbose)
+            Points = np.zeros((2*NxNy*Nz,3))
+            Points[0:NxNy*Nz,0]         = np.array(x1).reshape((NxNy*Nz), order='F')
+            Points[NxNy*Nz:2*NxNy*Nz,0] = np.array(x2).reshape((NxNy*Nz), order='F')
+            Points[0:NxNy*Nz,1]         = np.array(y1).reshape((NxNy*Nz), order='F')
+            Points[NxNy*Nz:2*NxNy*Nz,1] = np.array(y2).reshape((NxNy*Nz), order='F')
+            Points[0:NxNy*Nz,2]         = np.array(z1).reshape((NxNy*Nz), order='F')
+            Points[NxNy*Nz:2*NxNy*Nz,2] = np.array(z2).reshape((NxNy*Nz), order='F')
+            # ===================
+            im('      - Field',pName,verbose)
+            if stagData.fieldNature == 'Scalar' or stagData.fieldNature == '':
+                V_yin  = np.array(stagData.v1).reshape(NxNy,Nz)
+                V_yang = np.array(stagData.v2).reshape(NxNy,Nz)
+                vstack = np.zeros(2*NxNy*Nz)
+                vstack[0:NxNy*Nz]         = V_yin.reshape((NxNy*Nz), order='F')
+                vstack[NxNy*Nz:2*NxNy*Nz] = V_yang.reshape((NxNy*Nz),order='F')
+            # ===================
+            if stagData.fieldNature == 'Vectorial':
                 # ------ Vx ------
-                V_vx  = np.array(stagData.vx).reshape(NxNy,Nz, order='F')
-                vstackx = V_vx.reshape((NxNy*Nz), order='F')
+                V_yinx  = np.array(stagData.vx1).reshape(NxNy,Nz)
+                V_yangx = np.array(stagData.vx2).reshape(NxNy,Nz)
+                vstackx = np.zeros(2*NxNy*Nz)
+                vstackx[0:NxNy*Nz]         = V_yinx.reshape((NxNy*Nz), order='F')
+                vstackx[NxNy*Nz:2*NxNy*Nz] = V_yangx.reshape((NxNy*Nz),order='F')
                 # ------ Vy ------
-                V_vy  = np.array(stagData.vy).reshape(NxNy,Nz, order='F')
-                vstacky = V_vy.reshape((NxNy*Nz), order='F')
+                V_yiny  = np.array(stagData.vy1).reshape(NxNy,Nz)
+                V_yangy = np.array(stagData.vy2).reshape(NxNy,Nz)
+                vstacky = np.zeros(2*NxNy*Nz)
+                vstacky[0:NxNy*Nz]         = V_yiny.reshape((NxNy*Nz), order='F')
+                vstacky[NxNy*Nz:2*NxNy*Nz] = V_yangy.reshape((NxNy*Nz),order='F')
                 # ------ Vz ------
-                V_vz  = np.array(stagData.vz).reshape(NxNy,Nz, order='F')
-                vstackz = V_vz.reshape((NxNy*Nz), order='F')
-                # ------ P ------
-                V_vp  = np.array(stagData.P).reshape(NxNy,Nz, order='F')
-                vstackp = V_vp.reshape((NxNy*Nz), order='F')
-                # ------ stack ------
-                vstack = (vstackx,vstacky,vstackz,vstackp)
-            elif stagData.geometry == 'spherical':
-                # ------ Vx ------
-                V_vx  = np.array(stagData.vx).reshape(NxNy,Nz, order='F')
-                vstackx = V_vx.reshape((NxNy*Nz), order='F')
-                # ------ Vy ------
-                V_vy  = np.array(stagData.vy).reshape(NxNy,Nz, order='F')
-                vstacky = V_vy.reshape((NxNy*Nz), order='F')
-                # ------ Vz ------
-                V_vz  = np.array(stagData.vz).reshape(NxNy,Nz, order='F')
-                vstackz = V_vz.reshape((NxNy*Nz), order='F')
+                V_yinz  = np.array(stagData.vz1).reshape(NxNy,Nz)
+                V_yangz = np.array(stagData.vz2).reshape(NxNy,Nz)
+                vstackz = np.zeros(2*NxNy*Nz)
+                vstackz[0:NxNy*Nz]         = V_yinz.reshape((NxNy*Nz), order='F')
+                vstackz[NxNy*Nz:2*NxNy*Nz] = V_yangz.reshape((NxNy*Nz),order='F')
                 # ------ Vr ------
-                V_vr  = np.array(stagData.vr).reshape(NxNy,Nz, order='F')
-                vstackr = V_vr.reshape((NxNy*Nz), order='F')
+                V_yinr  = np.array(stagData.vr1).reshape(NxNy,Nz)
+                V_yangr = np.array(stagData.vr2).reshape(NxNy,Nz)
+                vstackr = np.zeros(2*NxNy*Nz)
+                vstackr[0:NxNy*Nz]         = V_yinr.reshape((NxNy*Nz), order='F')
+                vstackr[NxNy*Nz:2*NxNy*Nz] = V_yangr.reshape((NxNy*Nz),order='F')
                 # ------ Vtheta ------
-                V_theta  = np.array(stagData.vtheta).reshape(NxNy,Nz, order='F')
-                vstacktheta = V_theta.reshape((NxNy*Nz), order='F')
+                V_yintheta  = np.array(stagData.vtheta1).reshape(NxNy,Nz)
+                V_yangtheta = np.array(stagData.vtheta2).reshape(NxNy,Nz)
+                vstacktheta = np.zeros(2*NxNy*Nz)
+                vstacktheta[0:NxNy*Nz]         = V_yintheta.reshape((NxNy*Nz), order='F')
+                vstacktheta[NxNy*Nz:2*NxNy*Nz] = V_yangtheta.reshape((NxNy*Nz),order='F')
                 # ------ Vphi ------
-                V_phi  = np.array(stagData.vphi).reshape(NxNy,Nz, order='F')
-                vstackphi = V_phi.reshape((NxNy*Nz), order='F')
+                V_yinphi  = np.array(stagData.vphi1).reshape(NxNy,Nz)
+                V_yangphi = np.array(stagData.vphi2).reshape(NxNy,Nz)
+                vstackphi = np.zeros(2*NxNy*Nz)
+                vstackphi[0:NxNy*Nz]         = V_yinphi.reshape((NxNy*Nz), order='F')
+                vstackphi[NxNy*Nz:2*NxNy*Nz] = V_yangphi.reshape((NxNy*Nz),order='F')
                 # ------ P ------
-                V_vp  = np.array(stagData.P).reshape(NxNy,Nz, order='F')
-                vstackp = V_vp.reshape((NxNy*Nz), order='F')
-                # ------ stack ------
+                V_yinp  = np.array(stagData.P1).reshape(NxNy,Nz)
+                V_yangp = np.array(stagData.P2).reshape(NxNy,Nz)
+                vstackp = np.zeros(2*NxNy*Nz)
+                vstackp[0:NxNy*Nz]         = V_yinp.reshape((NxNy*Nz), order='F')
+                vstackp[NxNy*Nz:2*NxNy*Nz] = V_yangp.reshape((NxNy*Nz),order='F')
                 vstack = (vstackx,vstacky,vstackz,vstackr,vstacktheta,vstackphi,vstackp)
-
-    elif stagData.geometry == 'yy':
-        """
-        Adaptations for the exportation of the complete
-        stagData object with a Yin-Yang geoemtry.
-        """
-        im('    - Grid preparation',pName,verbose)
-        # =======================================
-        #Re-formating initial grids data
-        Nz   = len(stagData.slayers)      #Number of depth layers
-        NxNy = int(len(stagData.x1)/Nz)   #Number of points for each layers
-        x1     = stagData.x1.reshape(NxNy,Nz)
-        x2     = stagData.x2.reshape(NxNy,Nz)
-        y1     = stagData.y1.reshape(NxNy,Nz)
-        y2     = stagData.y2.reshape(NxNy,Nz)
-        z1     = stagData.z1.reshape(NxNy,Nz)
-        z2     = stagData.z2.reshape(NxNy,Nz)
-        #Re-organisation of data to have X,Y and Z grid matrices organized by depths:
-        X = np.zeros((Nz,2*NxNy))
-        Y = np.zeros((Nz,2*NxNy))
-        Z = np.zeros((Nz,2*NxNy))
-        X[:,0:NxNy]      = x1.T
-        X[:,NxNy:2*NxNy] = x2.T
-        Y[:,0:NxNy]      = y1.T
-        Y[:,NxNy:2*NxNy] = y2.T
-        Z[:,0:NxNy]      = z1.T
-        Z[:,NxNy:2*NxNy] = z2.T
-        # =========================================================================
-        # 1) Take the surface of the 2 grids, patch together and triangulate
-        # =========================================================================
-        im('    - Triangulation on convex hull',pName,verbose)
-        # NotaBene: _s for the surface layer
-        X_s    = X[Nz-1]
-        Y_s    = Y[Nz-1]
-        Z_s    = Z[Nz-1]
-        # =======================================
-        # Triangulation of the surface using a convex hull algorithm
-        from scipy.spatial import ConvexHull
-        points = np.array([X_s,Y_s,Z_s]).T
-        triYingYang = ConvexHull(points).simplices # simple way to grid it
-        nod = triYingYang.shape[0]
-        # =========================================================================
-        # 2) Create a 3D grid with tetrahedron elements
-        # =========================================================================
-        # Number all gridpoints we have
-        NUM_1       = np.array(range(0,NxNy*Nz))
-        NUMBER_1    = NUM_1.reshape((NxNy,Nz), order='F')
-        NUMBER_2    = NUMBER_1 + NxNy*Nz
-        # -- Make a loop over all levels
-        # init all arrays
-        ElementNumbers = np.zeros(((Nz-1)*nod,6),dtype=np.int32)
-        num_upper      = np.zeros(NxNy*2)
-        num_lower      = np.zeros(NxNy*2)
-        num_tri = np.zeros((nod,6))
-        for iz in range(Nz-1):
-            num_upper[0:NxNy]      = NUMBER_1[:,iz+1]#np.array(list(num_upper1) + list(num_upper2))
-            num_upper[NxNy:NxNy*2] = NUMBER_2[:,iz+1]
-            num_lower[0:NxNy]      = NUMBER_1[:,iz]#np.array(list(num_upper1) + list(num_upper2))
-            num_lower[NxNy:NxNy*2] = NUMBER_2[:,iz]
-            num_tri[:,0] = num_upper[triYingYang[:,0]]
-            num_tri[:,1] = num_upper[triYingYang[:,1]]
-            num_tri[:,2] = num_upper[triYingYang[:,2]]
-            num_tri[:,3] = num_lower[triYingYang[:,0]]
-            num_tri[:,4] = num_lower[triYingYang[:,1]]
-            num_tri[:,5] = num_lower[triYingYang[:,2]]
-            ElementNumbers[nod*iz:nod*(iz+1),:] = num_tri 
-
-        # =======================================
-        # Convert data into correct vector format
-        im('    - Convert data into correct vector format:',pName,verbose)
-        im('      - Grid',pName,verbose)
-        Points = np.zeros((2*NxNy*Nz,3))
-        Points[0:NxNy*Nz,0]         = np.array(x1).reshape((NxNy*Nz), order='F')
-        Points[NxNy*Nz:2*NxNy*Nz,0] = np.array(x2).reshape((NxNy*Nz), order='F')
-        Points[0:NxNy*Nz,1]         = np.array(y1).reshape((NxNy*Nz), order='F')
-        Points[NxNy*Nz:2*NxNy*Nz,1] = np.array(y2).reshape((NxNy*Nz), order='F')
-        Points[0:NxNy*Nz,2]         = np.array(z1).reshape((NxNy*Nz), order='F')
-        Points[NxNy*Nz:2*NxNy*Nz,2] = np.array(z2).reshape((NxNy*Nz), order='F')
         # ===================
-        im('      - Field',pName,verbose)
-        if stagData.fieldNature == 'Scalar' or stagData.fieldNature == '':
-            V_yin  = np.array(stagData.v1).reshape(NxNy,Nz)
-            V_yang = np.array(stagData.v2).reshape(NxNy,Nz)
-            vstack = np.zeros(2*NxNy*Nz)
-            vstack[0:NxNy*Nz]         = V_yin.reshape((NxNy*Nz), order='F')
-            vstack[NxNy*Nz:2*NxNy*Nz] = V_yang.reshape((NxNy*Nz),order='F')
-        # ===================
-        if stagData.fieldNature == 'Vectorial':
-            # ------ Vx ------
-            V_yinx  = np.array(stagData.vx1).reshape(NxNy,Nz)
-            V_yangx = np.array(stagData.vx2).reshape(NxNy,Nz)
-            vstackx = np.zeros(2*NxNy*Nz)
-            vstackx[0:NxNy*Nz]         = V_yinx.reshape((NxNy*Nz), order='F')
-            vstackx[NxNy*Nz:2*NxNy*Nz] = V_yangx.reshape((NxNy*Nz),order='F')
-            # ------ Vy ------
-            V_yiny  = np.array(stagData.vy1).reshape(NxNy,Nz)
-            V_yangy = np.array(stagData.vy2).reshape(NxNy,Nz)
-            vstacky = np.zeros(2*NxNy*Nz)
-            vstacky[0:NxNy*Nz]         = V_yiny.reshape((NxNy*Nz), order='F')
-            vstacky[NxNy*Nz:2*NxNy*Nz] = V_yangy.reshape((NxNy*Nz),order='F')
-            # ------ Vz ------
-            V_yinz  = np.array(stagData.vz1).reshape(NxNy,Nz)
-            V_yangz = np.array(stagData.vz2).reshape(NxNy,Nz)
-            vstackz = np.zeros(2*NxNy*Nz)
-            vstackz[0:NxNy*Nz]         = V_yinz.reshape((NxNy*Nz), order='F')
-            vstackz[NxNy*Nz:2*NxNy*Nz] = V_yangz.reshape((NxNy*Nz),order='F')
-            # ------ Vr ------
-            V_yinr  = np.array(stagData.vr1).reshape(NxNy,Nz)
-            V_yangr = np.array(stagData.vr2).reshape(NxNy,Nz)
-            vstackr = np.zeros(2*NxNy*Nz)
-            vstackr[0:NxNy*Nz]         = V_yinr.reshape((NxNy*Nz), order='F')
-            vstackr[NxNy*Nz:2*NxNy*Nz] = V_yangr.reshape((NxNy*Nz),order='F')
-            # ------ Vtheta ------
-            V_yintheta  = np.array(stagData.vtheta1).reshape(NxNy,Nz)
-            V_yangtheta = np.array(stagData.vtheta2).reshape(NxNy,Nz)
-            vstacktheta = np.zeros(2*NxNy*Nz)
-            vstacktheta[0:NxNy*Nz]         = V_yintheta.reshape((NxNy*Nz), order='F')
-            vstacktheta[NxNy*Nz:2*NxNy*Nz] = V_yangtheta.reshape((NxNy*Nz),order='F')
-            # ------ Vphi ------
-            V_yinphi  = np.array(stagData.vphi1).reshape(NxNy,Nz)
-            V_yangphi = np.array(stagData.vphi2).reshape(NxNy,Nz)
-            vstackphi = np.zeros(2*NxNy*Nz)
-            vstackphi[0:NxNy*Nz]         = V_yinphi.reshape((NxNy*Nz), order='F')
-            vstackphi[NxNy*Nz:2*NxNy*Nz] = V_yangphi.reshape((NxNy*Nz),order='F')
-            # ------ P ------
-            V_yinp  = np.array(stagData.P1).reshape(NxNy,Nz)
-            V_yangp = np.array(stagData.P2).reshape(NxNy,Nz)
-            vstackp = np.zeros(2*NxNy*Nz)
-            vstackp[0:NxNy*Nz]         = V_yinp.reshape((NxNy*Nz), order='F')
-            vstackp[NxNy*Nz:2*NxNy*Nz] = V_yangp.reshape((NxNy*Nz),order='F')
-            vstack = (vstackx,vstacky,vstackz,vstackr,vstacktheta,vstackphi,vstackp)
-    # ===================
-    if creat_pointID:
-        im('      - Creat pointID',pName,verbose)
-        if stagData.geometry == 'yy':
-            IDyin   = np.array(range(NxNy*Nz),dtype=np.int32).reshape(NxNy,Nz)
-            IDyang  = np.array(range(NxNy*Nz,2*NxNy*Nz),dtype=np.int32).reshape(NxNy,Nz)
-            pointID = np.zeros(2*NxNy*Nz)
-            pointID[0:NxNy*Nz]         = IDyin.reshape((NxNy*Nz), order='F')
-            pointID[NxNy*Nz:2*NxNy*Nz] = IDyang.reshape((NxNy*Nz),order='F')
+        if creat_pointID:
+            im('      - Creat pointID',pName,verbose)
+            if stagData.geometry == 'yy':
+                IDyin   = np.array(range(NxNy*Nz),dtype=np.int32).reshape(NxNy,Nz)
+                IDyang  = np.array(range(NxNy*Nz,2*NxNy*Nz),dtype=np.int32).reshape(NxNy,Nz)
+                pointID = np.zeros(2*NxNy*Nz)
+                pointID[0:NxNy*Nz]         = IDyin.reshape((NxNy*Nz), order='F')
+                pointID[NxNy*Nz:2*NxNy*Nz] = IDyang.reshape((NxNy*Nz),order='F')
+            else:
+                pointID = np.array(range(NxNy*Nz),dtype=np.int32).reshape(NxNy*Nz, order='F')        
+                pointID = pointID.reshape((NxNy*Nz), order='F')
         else:
-            pointID = np.array(range(NxNy*Nz),dtype=np.int32).reshape(NxNy*Nz, order='F')        
-            pointID = pointID.reshape((NxNy*Nz), order='F')
+            pointID = None
+        # =========================================================================
+        if not return_only:
+            # Exportation under VTKUnstructuredGrid format
+            if ASCII:
+                im('    - Writing under .vtu format',pName,verbose)
+            else:
+                im('    - Writing under .xdmf + .h5 formats',pName,verbose)
+            __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=ASCII,path=path,pointID=pointID)
+            im('Exportation done!',pName,verbose)
+            if ASCII:
+                im('File: '+fname+'.vtu',pName,verbose)
+                im('Path: '+path,pName,verbose)
+            else:
+                im('Files: '+fname+'.xdmf + '+fname+'.h5',pName,verbose)
+                im('Path : '+path,pName,verbose)
+        else:
+            # Return all grid/mesh elements
+            return Points,ElementNumbers,vstack,pointID
     else:
-        pointID = None
-    # =========================================================================
-    if not return_only:
-        # Exportation under VTKUnstructuredGrid format
-        if ASCII:
-            im('    - Writing under .vtu format',pName,verbose)
-        else:
-            im('    - Writing under .xdmf + .h5 formats',pName,verbose)
-        __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=ASCII,path=path,pointID=pointID)
-        im('Exportation done!',pName,verbose)
-        if ASCII:
-            im('File: '+fname+'.vtu',pName,verbose)
-            im('Path: '+path,pName,verbose)
-        else:
-            im('Files: '+fname+'.xdmf + '+fname+'.h5',pName,verbose)
-            im('Path : '+path,pName,verbose)
-    else:
-        # Return all grid/mesh elements
-        return Points,ElementNumbers,vstack,pointID
+        im('Areal data detected (single depth): -> triangulation',pName,verbose)
+        # --- File names
+        xdmf_file = fname + '.xdmf'
+        h5_file   = fname + '.h5'
+        write_slice = False
+        # =======================================
+        if stagData.geometry == 'cart3D' or stagData.geometry == 'spherical':
+            write_slice = True
+            X = stagData.x.flatten()
+            Y = stagData.y.flatten()
+            Z = stagData.z.flatten()
+            V = stagData.v.flatten()
+            VX = stagData.vx.flatten()
+            VY = stagData.vy.flatten()
+            VZ = stagData.vz.flatten()
+            PRESSURE = stagData.P.flatten()
+        # =======================================
+        elif stagData.geometry == 'yy':
+            write_slice = True
+            X = stagData.x
+            Y = stagData.y
+            Z = stagData.z
+            V = stagData.v
+            VX = stagData.vx
+            VY = stagData.vy
+            VZ = stagData.vz
+            VR = stagData.vr
+            VTHETA = stagData.vtheta
+            VPHI = stagData.vphi
+            PRESSURE = stagData.P
+        # =======================================
+        if write_slice:
+            nod = len(X)
+            # ---
+            if creat_pointID:
+                im('  -> Creat pointID',pName,verbose)
+                pointID = np.arange(nod)
+            # ---
+            points = np.zeros((nod,3))
+            points[:,0] = X
+            points[:,1] = Y
+            points[:,2] = Z
+            # ----
+            if stagData.geometry == 'cart3D' or stagData.geometry == 'spherical':
+                im('  -> Delaunay Triangulation',pName,verbose)
+                tri = Delaunay(points[:,0:2])
+            elif stagData.geometry == 'yy':
+                im('  -> Convex Hull Triangulation',pName,verbose)    
+                tri = ConvexHull(points)
+            simplices = tri.simplices
+            # --- Write the XDMF file
+            im('  -> Writing the instruction file (XDMF)',pName,verbose)
+            fid = open(path+xdmf_file,'w')
+            fid.write('<?xml version="1.0" ?>'+'\n')
+            fid.write('<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>'+'\n')
+            fid.write('<Xdmf xmlns:xi="http://www.w3.org/2003/XInclude" Version="2.2">'+'\n')
+            fid.write('  <Domain>'+'\n')
+            fid.write('    <Grid GridType="Uniform">'+'\n')
+            fid.write('      <Topology TopologyType="Triangle" Dimensions="%s">'%int(simplices.shape[0])+'\n')
+            fid.write('        <DataItem Dimensions="%s'%int(simplices.shape[0])+' 3" NumberType="Int" Precision="8" Format="HDF">'+h5_file+':/Topology</DataItem>'+'\n')
+            fid.write('      </Topology>'+'\n')
+            fid.write('      <Geometry GeometryType="XYZ">'+'\n')
+            fid.write('        <DataItem Dimensions="%s 3" NumberType="Float" Precision="4" Format="HDF">'%nod+h5_file+':/Geometry/Points</DataItem>'+'\n')
+            fid.write('      </Geometry>'+'\n')
+            # --- Field(s)
+            if stagData.fieldNature == 'Scalar':
+                fid.write('      <Attribute Name="'+stagData.fieldType+'" Active="1" AttributeType="Scalar" Center="Node">'+'\n')
+                fid.write('        <DataItem Dimensions="%s" NumberType="Float" Precision="4" Format="HDF">'%nod+h5_file+':/Node/field_scalar</DataItem>'+'\n')
+                fid.write('      </Attribute>'+'\n')
+            elif stagData.fieldNature == 'Vectorial':
+                # ---- Cartesian Velocities ----
+                fid.write('      <Attribute AttributeType="Vector" Center="Node" Name="%s">\n' % vect_topo_name)
+                fid.write('        <DataItem DataType="Float" Dimensions="%s %s" Format="HDF" Precision="8">\n'%(nod, 3))
+                fid.write('            '+h5_file+':/Node/field_cart\n')
+                fid.write('        </DataItem>\n')
+                fid.write('      </Attribute>\n\n')
+                if stagData.geometry == 'yy':
+                    # ---- Spherical Velocities ----
+                    fid.write('      <Attribute AttributeType="Vector" Center="Node" Name="%s">\n' % vect_geo_name)
+                    fid.write('        <DataItem DataType="Float" Dimensions="%s %s" Format="HDF" Precision="8">\n'%(nod, 3))
+                    fid.write('            '+h5_file+':/Node/field_sphe\n')
+                    fid.write('        </DataItem>\n')
+                    fid.write('      </Attribute>\n\n')
+                # ---- Pressure ----
+                fid.write('      <Attribute Name="'+'Pressure'+'" Active="1" AttributeType="Scalar" Center="Node">'+'\n')
+                fid.write('        <DataItem Dimensions="%s" NumberType="Float" Precision="4" Format="HDF">'%nod+h5_file+':/Node/field_pressure</DataItem>'+'\n')
+                fid.write('      </Attribute>'+'\n')
+            # --- pointID
+            if creat_pointID:
+                fid.write('      <Attribute AttributeType="Scalar" Center="Node" Name="PointID">\n')
+                fid.write('        <DataItem DataType="Int" Dimensions="%s" Format="HDF" Precision="8">\n'%pointID.shape[0])
+                fid.write('            '+h5_file+':/Node/pointID\n')
+                fid.write('        </DataItem>\n')
+                fid.write('      </Attribute>\n\n')
+            # --- close
+            fid.write('    </Grid>'+'\n')
+            fid.write('  </Domain>'+'\n')
+            fid.write('</Xdmf>')
+            fid.close()
+            # --- write the H5 file
+            im('  -> Writing the data file (HDF5)',pName,verbose)
+            fid = h5py.File(path+h5_file,'w')
+            dset = fid.create_dataset('Topology', data = simplices)
+            dset = fid.create_dataset('/Geometry/Points', data = points)
+            if stagData.fieldNature == 'Scalar':
+                dset = fid.create_dataset('/Node/field_scalar', data = V)
+            elif stagData.fieldNature == 'Vectorial':
+                dset = fid.create_dataset('/Node/field_cart', data = np.array([VX,VY,VZ]).T)
+                if stagData.geometry == 'yy':
+                    dset = fid.create_dataset('/Node/field_sphe', data = np.array([VR,VTHETA,VPHI]).T)
+                dset = fid.create_dataset('/Node/field_pressure', data = PRESSURE)
+            if creat_pointID:
+                dset = fid.create_dataset('/Node/pointID', data = pointID)
+            fid.close()
+            # --- Finish!
+            im('Process complete',pName,verbose)
+            im('Files generated:',pName,verbose)
+            im('  -> '+path+xdmf_file,pName,verbose)
+            im('  -> '+path+h5_file,pName,verbose)
 
 
 
 
 
-def __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=False,path='./',pointID=None):
+def __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=False,path='./',pointID=None,\
+                   vect_topo_name='Velocity Cartesian',vect_geo_name='Velocity Spherical'):
     """ This function creats and exports trianguled geometry and field(s) into
     a .vtu/.h5 file under the name fname. This function was built to be used by
     stag2VTU() and stag2VTU_For_overlapping() functions.
@@ -594,7 +1010,7 @@ def __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=False,path=
             if stagData.geometry == 'cart3D':
                 (vstackx,vstacky,vstackz,vstackp) = (vstack[0],vstack[1],vstack[2],vstack[3])
                 # ------ Vx, Vy, Vz ------
-                fid.write('      <DataArray type="Float32" Name="Velocity Cartesian" NumberOfComponents="3" format="ascii">\n')
+                fid.write('      <DataArray type="Float32" Name="'+vect_topo_name+'" NumberOfComponents="3" format="ascii">\n')
                 for i in range(len(vstackx)):
                     fid.write('   %g %g %g \n' % (vstackx[i],vstacky[i],vstackz[i]))
                 fid.write('      </DataArray>\n')
@@ -607,12 +1023,12 @@ def __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=False,path=
             if stagData.geometry == 'yy' or stagData.geometry == 'spherical':
                 (vstackx,vstacky,vstackz,vstackr,vstacktheta,vstackphi,vstackp) = (vstack[0],vstack[1],vstack[2],vstack[3],vstack[4],vstack[5],vstack[6])
                 # ------ Vx, Vy, Vz ------
-                fid.write('      <DataArray type="Float32" Name="Cartesian Velocity" NumberOfComponents="3" format="ascii">\n')
+                fid.write('      <DataArray type="Float32" Name="'+vect_topo_name+'" NumberOfComponents="3" format="ascii">\n')
                 for i in range(len(vstackx)):
                     fid.write('   %g %g %g \n' % (vstackx[i],vstacky[i],vstackz[i]))
                 fid.write('      </DataArray>\n')
                 # ------ Vr, Vtheta, Vphi ------
-                fid.write('      <DataArray type="Float32" Name="Spherical Velocity" NumberOfComponents="3" format="ascii">\n')
+                fid.write('      <DataArray type="Float32" Name="'+vect_geo_name+'" NumberOfComponents="3" format="ascii">\n')
                 for i in range(len(vstackx)):
                     fid.write('   %g %g %g \n' % (vstackr[i],vstacktheta[i],vstackphi[i]))
                 fid.write('      </DataArray>\n')
@@ -725,7 +1141,7 @@ def __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=False,path=
             fid.write('    </Attribute>\n\n')
         else:
             # ---- Cartesian Velocities ----
-            fid.write('    <Attribute AttributeType="Vector" Center="Node" Name="%s">\n' % 'Cartesian Velocity')
+            fid.write('    <Attribute AttributeType="Vector" Center="Node" Name="%s">\n' % vect_topo_name)
             fid.write('        <DataItem DataType="Float" Dimensions="%s %s" Format="HDF" Precision="8">\n'%\
                     (Datax.shape[0], 3))
             fid.write('            '+fname_h5+':/Data1\n')
@@ -733,7 +1149,7 @@ def __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=False,path=
             fid.write('    </Attribute>\n\n')
             if stagData.geometry == 'yy' or stagData.geometry == 'spherical':
                 # ----  Shperical Velocities ----
-                fid.write('    <Attribute AttributeType="Vector" Center="Node" Name="%s">\n' % 'Spherical Velocity')
+                fid.write('    <Attribute AttributeType="Vector" Center="Node" Name="%s">\n' % vect_geo_name)
                 fid.write('        <DataItem DataType="Float" Dimensions="%s %s" Format="HDF" Precision="8">\n'%\
                         (Datar.shape[0], 3))
                 fid.write('            '+fname_h5+':/Data2\n')
@@ -767,8 +1183,8 @@ def __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=False,path=
         # =========================================================================
         #Code:
         #  Data0 = scalar field
-        #  Data1 = cartesian velocities
-        #  Data2 = spherical velocities
+        #  Data1 = topocentric (cartesian) velocities
+        #  Data2 = geodetic (spherical) velocities
         #  Data3 = Pressure
         import h5py
         fid = h5py.File(path+fname_h5, 'w')
@@ -948,7 +1364,7 @@ def stagCloud2timeVTU_TTK(fname,stagCloudData,cloudPlateGather,multifile=True,fi
                       creat_pointID=False,verbose=True,extended_verbose=False):
     """ -- Geometry Adaptative Toolkit transforming stagCloudData into VTU --
     This function creats readable file for Paraview for an efficient 
-    3D visualization of data contain in an input stagCloudData instance.
+    3D visualization of data contained in an input stagCloudData instance.
     This function works directly on a stagCloudData input object and adapts the
     constuction of the triangulation according to this geometry and iterate
     automatically in the cloud. Due to large quantities of data created, outputs
@@ -1489,6 +1905,348 @@ def __write_time_xdmf(step,fname_vtk,fname_h5_geom,fname_h5,stagData,Points_shap
         fid.write('</Domain>\n')
         fid.write('</Xdmf>')
         fid.close()
+
+
+
+
+
+
+
+# ============================================================
+# 
+# Ci dessous book2VTU: pour le moment que la copy de stag2VTU
+# 
+# ============================================================
+
+def book2VTU(fname,stagData,path='./',ASCII=False,verbose=True,return_only=False,creat_pointID=False):
+    """ -- Geometry Adaptative Toolkit transforming stagData into VTU --
+    This function creats readable file for Paraview for an efficient 
+    3D visualization of data contain in an input stagData instance.
+    This function works directly on a stagData input object and adapts the
+    constuction of the triangulation according to this geometry. Furthermore
+    stag2VTU is able to deal with vectorial and scalar fields. Outputs can be
+    written under two format: 1. the explicit ascii .vtu format or 2. the
+    coupled .h5 and .xdmf format (more efficient)
+    Concerning geometies:
+      - 'yy' deal with non overlapping stagData object so with stagData.x1,
+        stagData.x2, stagData.y1 ... fields
+      - 'cart3D', read stagData.x, .y, .z and .v fields for a scalar field as
+        example
+      - 'spherical' deal with the spherical grid so stagData.x, .y, .z fields
+        and ignore .xc, .yc and .zc fields.
+    Note that the internal field stagData.slayers of the stagData object
+    must be filled!
+    --> stag2vtu is main function of the pypStag Visualization ToolKit
+
+    <i> : fname = str, name of the exported file without any extention
+          stagData = stagData object, stagData object that will be transform
+                     into meshed file
+          path = str, path where you want to export your new meshed file.
+                 [Default: path='./']
+          ASCII = bool, if True, the export paraview file will be write
+                  in ASCII .vtu format (take lots of memory space),
+                  if not ASCII, the export will be partitioned in
+                  a .xdmf and .h5 file (very efficient in writing,
+                  reading and save lots of memory).
+                  [Default, ASCII=False]
+          verbose = bool, if True, then generate a verbose output
+                    [Default, verbose=True]
+          return_only = bool, if True, stag2VTU() will just manage the
+                        3D tetrahedralization of the grid, and returns:
+                        (Points,ElementNumbers,vstack) corresponding to 
+                        points matrix, meshing doc and corresponding field.
+                        Do not call __writeVKTStag() if True
+                        If False, generate meshed file for paraview, call
+                        __writeVTKStag()
+                        [Default, return_only=False]
+          creat_pointID = bool, if True then creat the list of points ID sorted as
+                          it is in the field stagData.x (Yin and Yang together).
+                          This field will then transfert to the writing function and
+                          the .h5/.xdmf will have an extra field corresponding to 
+                          these points ID (e.g. very usefull if post processing with TTK)
+                          WARNING: This option is only available if ASCII = False
+                                   (ie .h5/.xdmf output)
+    """
+    pName = 'stag2VTU'
+    im('pypStag Visualization ToolKit',pName,verbose)
+    if ASCII:
+        im('Requested: stagData -> .vtu',pName,verbose)
+    else:
+        im('Requested: stagData -> .xdmf + .h5',pName,verbose)
+
+    #--------------
+    if path[-1] != '/':
+        path += '/'
+    #--------------
+    if stagData.geometry == 'cart3D' or stagData.geometry == 'spherical':
+        """
+        Adaptations for the exportation of the complete
+        stagData object with a 3D cartesian or spherical
+        geometries.
+        """
+        im('    - Grid preparation',pName,verbose)
+        # =======================================
+        #Re-formating initial grids data
+        Nx = len(stagData.x_coords)
+        Ny = len(stagData.y_coords)
+        Nz = len(stagData.slayers)
+        NxNy = Nx*Ny
+        x = np.array(stagData.x).reshape(NxNy*Nz, order='F')
+        y = np.array(stagData.y).reshape(NxNy*Nz, order='F')
+        z = np.array(stagData.z).reshape(NxNy*Nz, order='F')
+        v = np.array(stagData.v).reshape(NxNy*Nz, order='F')
+        # =========================================================================
+        # 1) Take the surface of the 2 grids, patch together and triangulate
+        # =========================================================================
+        im('    - Planar triangulation',pName,verbose)
+        # =======================================
+        #Computation of the triangulation of just a level of depth
+        triPlanar_simplices = triangulationPlanar(Nx,Ny,ordering='yx')
+        nod = len(triPlanar_simplices)
+        # =========================================================================
+        # 2) Create a 3D grid with tetrahedron elements
+        # =========================================================================
+        # Number all gridpoints we have
+        NUM         = np.array(range(0,NxNy*Nz))
+        NUMBER      = NUM.reshape((NxNy,Nz), order='F')
+        # Make a loop over all levels
+        ElementNumbers = np.zeros(((Nz-1)*nod,6),dtype=np.int32)
+        num_upper      = np.zeros(NxNy)
+        num_lower      = np.zeros(NxNy)
+        num_tri = np.zeros((nod,6))
+        for iz in range(Nz-1):
+            num_upper      = NUMBER[:,iz+1]
+            num_lower      = NUMBER[:,iz]
+            num_tri[:,0] = num_upper[triPlanar_simplices[:,0]]
+            num_tri[:,1] = num_upper[triPlanar_simplices[:,1]]
+            num_tri[:,2] = num_upper[triPlanar_simplices[:,2]]
+            num_tri[:,3] = num_lower[triPlanar_simplices[:,0]]
+            num_tri[:,4] = num_lower[triPlanar_simplices[:,1]]
+            num_tri[:,5] = num_lower[triPlanar_simplices[:,2]]
+            ElementNumbers[nod*iz:nod*(iz+1),:] = num_tri
+        # =======================================
+        # Convert data into correct vector format
+        im('    - Convert data into correct vector format',pName,verbose)
+        im('      - Grid',pName,verbose)
+        Points = np.zeros((NxNy*Nz,3))
+        Points[:,0] = np.array(x).reshape((NxNy*Nz), order='F')
+        Points[:,1] = np.array(y).reshape((NxNy*Nz), order='F')
+        Points[:,2] = np.array(z).reshape((NxNy*Nz), order='F')
+        # ===================
+        im('      - Field',pName,verbose)
+        if stagData.fieldNature == 'Scalar' or stagData.fieldNature == '':
+            V_yy  = np.array(v).reshape(NxNy,Nz, order='F')
+            vstack = V_yy.reshape((NxNy*Nz), order='F')
+        # ===================
+        if stagData.fieldNature == 'Vectorial':
+            if stagData.geometry == 'cart3D':
+                # ------ Vx ------
+                V_vx  = np.array(stagData.vx).reshape(NxNy,Nz, order='F')
+                vstackx = V_vx.reshape((NxNy*Nz), order='F')
+                # ------ Vy ------
+                V_vy  = np.array(stagData.vy).reshape(NxNy,Nz, order='F')
+                vstacky = V_vy.reshape((NxNy*Nz), order='F')
+                # ------ Vz ------
+                V_vz  = np.array(stagData.vz).reshape(NxNy,Nz, order='F')
+                vstackz = V_vz.reshape((NxNy*Nz), order='F')
+                # ------ P ------
+                V_vp  = np.array(stagData.P).reshape(NxNy,Nz, order='F')
+                vstackp = V_vp.reshape((NxNy*Nz), order='F')
+                # ------ stack ------
+                vstack = (vstackx,vstacky,vstackz,vstackp)
+            elif stagData.geometry == 'spherical':
+                # ------ Vx ------
+                V_vx  = np.array(stagData.vx).reshape(NxNy,Nz, order='F')
+                vstackx = V_vx.reshape((NxNy*Nz), order='F')
+                # ------ Vy ------
+                V_vy  = np.array(stagData.vy).reshape(NxNy,Nz, order='F')
+                vstacky = V_vy.reshape((NxNy*Nz), order='F')
+                # ------ Vz ------
+                V_vz  = np.array(stagData.vz).reshape(NxNy,Nz, order='F')
+                vstackz = V_vz.reshape((NxNy*Nz), order='F')
+                # ------ Vr ------
+                V_vr  = np.array(stagData.vr).reshape(NxNy,Nz, order='F')
+                vstackr = V_vr.reshape((NxNy*Nz), order='F')
+                # ------ Vtheta ------
+                V_theta  = np.array(stagData.vtheta).reshape(NxNy,Nz, order='F')
+                vstacktheta = V_theta.reshape((NxNy*Nz), order='F')
+                # ------ Vphi ------
+                V_phi  = np.array(stagData.vphi).reshape(NxNy,Nz, order='F')
+                vstackphi = V_phi.reshape((NxNy*Nz), order='F')
+                # ------ P ------
+                V_vp  = np.array(stagData.P).reshape(NxNy,Nz, order='F')
+                vstackp = V_vp.reshape((NxNy*Nz), order='F')
+                # ------ stack ------
+                vstack = (vstackx,vstacky,vstackz,vstackr,vstacktheta,vstackphi,vstackp)
+
+    elif stagData.geometry == 'yy':
+        """
+        Adaptations for the exportation of the complete
+        stagData object with a Yin-Yang geoemtry.
+        """
+        im('    - Grid preparation',pName,verbose)
+        # =======================================
+        #Re-formating initial grids data
+        Nz   = len(stagData.slayers)      #Number of depth layers
+        NxNy = int(len(stagData.x1)/Nz)   #Number of points for each layers
+        x1     = stagData.x1.reshape(NxNy,Nz)
+        x2     = stagData.x2.reshape(NxNy,Nz)
+        y1     = stagData.y1.reshape(NxNy,Nz)
+        y2     = stagData.y2.reshape(NxNy,Nz)
+        z1     = stagData.z1.reshape(NxNy,Nz)
+        z2     = stagData.z2.reshape(NxNy,Nz)
+        #Re-organisation of data to have X,Y and Z grid matrices organized by depths:
+        X = np.zeros((Nz,2*NxNy))
+        Y = np.zeros((Nz,2*NxNy))
+        Z = np.zeros((Nz,2*NxNy))
+        X[:,0:NxNy]      = x1.T
+        X[:,NxNy:2*NxNy] = x2.T
+        Y[:,0:NxNy]      = y1.T
+        Y[:,NxNy:2*NxNy] = y2.T
+        Z[:,0:NxNy]      = z1.T
+        Z[:,NxNy:2*NxNy] = z2.T
+        # =========================================================================
+        # 1) Take the surface of the 2 grids, patch together and triangulate
+        # =========================================================================
+        im('    - Triangulation on convex hull',pName,verbose)
+        # NotaBene: _s for the surface layer
+        X_s    = X[Nz-1]
+        Y_s    = Y[Nz-1]
+        Z_s    = Z[Nz-1]
+        # =======================================
+        # Triangulation of the surface using a convex hull algorithm
+        points = np.array([X_s,Y_s,Z_s]).T
+        triYingYang = ConvexHull(points).simplices # simple way to grid it
+        nod = triYingYang.shape[0]
+        # =========================================================================
+        # 2) Create a 3D grid with tetrahedron elements
+        # =========================================================================
+        # Number all gridpoints we have
+        NUM_1       = np.array(range(0,NxNy*Nz))
+        NUMBER_1    = NUM_1.reshape((NxNy,Nz), order='F')
+        NUMBER_2    = NUMBER_1 + NxNy*Nz
+        # -- Make a loop over all levels
+        # init all arrays
+        ElementNumbers = np.zeros(((Nz-1)*nod,6),dtype=np.int32)
+        num_upper      = np.zeros(NxNy*2)
+        num_lower      = np.zeros(NxNy*2)
+        num_tri = np.zeros((nod,6))
+        for iz in range(Nz-1):
+            num_upper[0:NxNy]      = NUMBER_1[:,iz+1]#np.array(list(num_upper1) + list(num_upper2))
+            num_upper[NxNy:NxNy*2] = NUMBER_2[:,iz+1]
+            num_lower[0:NxNy]      = NUMBER_1[:,iz]#np.array(list(num_upper1) + list(num_upper2))
+            num_lower[NxNy:NxNy*2] = NUMBER_2[:,iz]
+            num_tri[:,0] = num_upper[triYingYang[:,0]]
+            num_tri[:,1] = num_upper[triYingYang[:,1]]
+            num_tri[:,2] = num_upper[triYingYang[:,2]]
+            num_tri[:,3] = num_lower[triYingYang[:,0]]
+            num_tri[:,4] = num_lower[triYingYang[:,1]]
+            num_tri[:,5] = num_lower[triYingYang[:,2]]
+            ElementNumbers[nod*iz:nod*(iz+1),:] = num_tri 
+
+        # =======================================
+        # Convert data into correct vector format
+        im('    - Convert data into correct vector format:',pName,verbose)
+        im('      - Grid',pName,verbose)
+        Points = np.zeros((2*NxNy*Nz,3))
+        Points[0:NxNy*Nz,0]         = np.array(x1).reshape((NxNy*Nz), order='F')
+        Points[NxNy*Nz:2*NxNy*Nz,0] = np.array(x2).reshape((NxNy*Nz), order='F')
+        Points[0:NxNy*Nz,1]         = np.array(y1).reshape((NxNy*Nz), order='F')
+        Points[NxNy*Nz:2*NxNy*Nz,1] = np.array(y2).reshape((NxNy*Nz), order='F')
+        Points[0:NxNy*Nz,2]         = np.array(z1).reshape((NxNy*Nz), order='F')
+        Points[NxNy*Nz:2*NxNy*Nz,2] = np.array(z2).reshape((NxNy*Nz), order='F')
+        # ===================
+        im('      - Field',pName,verbose)
+        if stagData.fieldNature == 'Scalar' or stagData.fieldNature == '':
+            V_yin  = np.array(stagData.v1).reshape(NxNy,Nz)
+            V_yang = np.array(stagData.v2).reshape(NxNy,Nz)
+            vstack = np.zeros(2*NxNy*Nz)
+            vstack[0:NxNy*Nz]         = V_yin.reshape((NxNy*Nz), order='F')
+            vstack[NxNy*Nz:2*NxNy*Nz] = V_yang.reshape((NxNy*Nz),order='F')
+        # ===================
+        if stagData.fieldNature == 'Vectorial':
+            # ------ Vx ------
+            V_yinx  = np.array(stagData.vx1).reshape(NxNy,Nz)
+            V_yangx = np.array(stagData.vx2).reshape(NxNy,Nz)
+            vstackx = np.zeros(2*NxNy*Nz)
+            vstackx[0:NxNy*Nz]         = V_yinx.reshape((NxNy*Nz), order='F')
+            vstackx[NxNy*Nz:2*NxNy*Nz] = V_yangx.reshape((NxNy*Nz),order='F')
+            # ------ Vy ------
+            V_yiny  = np.array(stagData.vy1).reshape(NxNy,Nz)
+            V_yangy = np.array(stagData.vy2).reshape(NxNy,Nz)
+            vstacky = np.zeros(2*NxNy*Nz)
+            vstacky[0:NxNy*Nz]         = V_yiny.reshape((NxNy*Nz), order='F')
+            vstacky[NxNy*Nz:2*NxNy*Nz] = V_yangy.reshape((NxNy*Nz),order='F')
+            # ------ Vz ------
+            V_yinz  = np.array(stagData.vz1).reshape(NxNy,Nz)
+            V_yangz = np.array(stagData.vz2).reshape(NxNy,Nz)
+            vstackz = np.zeros(2*NxNy*Nz)
+            vstackz[0:NxNy*Nz]         = V_yinz.reshape((NxNy*Nz), order='F')
+            vstackz[NxNy*Nz:2*NxNy*Nz] = V_yangz.reshape((NxNy*Nz),order='F')
+            # ------ Vr ------
+            V_yinr  = np.array(stagData.vr1).reshape(NxNy,Nz)
+            V_yangr = np.array(stagData.vr2).reshape(NxNy,Nz)
+            vstackr = np.zeros(2*NxNy*Nz)
+            vstackr[0:NxNy*Nz]         = V_yinr.reshape((NxNy*Nz), order='F')
+            vstackr[NxNy*Nz:2*NxNy*Nz] = V_yangr.reshape((NxNy*Nz),order='F')
+            # ------ Vtheta ------
+            V_yintheta  = np.array(stagData.vtheta1).reshape(NxNy,Nz)
+            V_yangtheta = np.array(stagData.vtheta2).reshape(NxNy,Nz)
+            vstacktheta = np.zeros(2*NxNy*Nz)
+            vstacktheta[0:NxNy*Nz]         = V_yintheta.reshape((NxNy*Nz), order='F')
+            vstacktheta[NxNy*Nz:2*NxNy*Nz] = V_yangtheta.reshape((NxNy*Nz),order='F')
+            # ------ Vphi ------
+            V_yinphi  = np.array(stagData.vphi1).reshape(NxNy,Nz)
+            V_yangphi = np.array(stagData.vphi2).reshape(NxNy,Nz)
+            vstackphi = np.zeros(2*NxNy*Nz)
+            vstackphi[0:NxNy*Nz]         = V_yinphi.reshape((NxNy*Nz), order='F')
+            vstackphi[NxNy*Nz:2*NxNy*Nz] = V_yangphi.reshape((NxNy*Nz),order='F')
+            # ------ P ------
+            V_yinp  = np.array(stagData.P1).reshape(NxNy,Nz)
+            V_yangp = np.array(stagData.P2).reshape(NxNy,Nz)
+            vstackp = np.zeros(2*NxNy*Nz)
+            vstackp[0:NxNy*Nz]         = V_yinp.reshape((NxNy*Nz), order='F')
+            vstackp[NxNy*Nz:2*NxNy*Nz] = V_yangp.reshape((NxNy*Nz),order='F')
+            vstack = (vstackx,vstacky,vstackz,vstackr,vstacktheta,vstackphi,vstackp)
+    # ===================
+    if creat_pointID:
+        im('      - Creat pointID',pName,verbose)
+        if stagData.geometry == 'yy':
+            IDyin   = np.array(range(NxNy*Nz),dtype=np.int32).reshape(NxNy,Nz)
+            IDyang  = np.array(range(NxNy*Nz,2*NxNy*Nz),dtype=np.int32).reshape(NxNy,Nz)
+            pointID = np.zeros(2*NxNy*Nz)
+            pointID[0:NxNy*Nz]         = IDyin.reshape((NxNy*Nz), order='F')
+            pointID[NxNy*Nz:2*NxNy*Nz] = IDyang.reshape((NxNy*Nz),order='F')
+        else:
+            pointID = np.array(range(NxNy*Nz),dtype=np.int32).reshape(NxNy*Nz, order='F')        
+            pointID = pointID.reshape((NxNy*Nz), order='F')
+    else:
+        pointID = None
+    # =========================================================================
+    if not return_only:
+        # Exportation under VTKUnstructuredGrid format
+        if ASCII:
+            im('    - Writing under .vtu format',pName,verbose)
+        else:
+            im('    - Writing under .xdmf + .h5 formats',pName,verbose)
+        __writeVKTStag(fname,stagData,Points,ElementNumbers,vstack,ASCII=ASCII,path=path,pointID=pointID)
+        im('Exportation done!',pName,verbose)
+        if ASCII:
+            im('File: '+fname+'.vtu',pName,verbose)
+            im('Path: '+path,pName,verbose)
+        else:
+            im('Files: '+fname+'.xdmf + '+fname+'.h5',pName,verbose)
+            im('Path : '+path,pName,verbose)
+    else:
+        # Return all grid/mesh elements
+        return Points,ElementNumbers,vstack,pointID
+
+
+
+
+
+
+
 
 
 

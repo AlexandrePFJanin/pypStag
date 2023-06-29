@@ -311,7 +311,160 @@ def lithosphere_thickness(stagData,plot=True):
 
 
 
+# ---------------------------------------------------
+#       A COMPLETER : FAIRE UN PETIT MODULE DE CALCUL POUR PAR EXEMPLE DIV ET VOR
+# ---------------------------------------------------
 
+
+def divNvor(stagData,verbose=True,new=True):
+    """
+    """
+    pName = 'divNvor'
+    if stagData.geometry == 'yy':
+        # creat the Yin Yang grid
+        x1, x2 = stagData.x1_overlap.reshape(stagData.nx,stagData.ny,stagData.nz), stagData.x2_overlap.reshape(stagData.nx,stagData.ny,stagData.nz)
+        y1, y2 = stagData.y1_overlap.reshape(stagData.nx,stagData.ny,stagData.nz), stagData.y2_overlap.reshape(stagData.nx,stagData.ny,stagData.nz)
+        z1, z2 = stagData.z1_overlap.reshape(stagData.nx,stagData.ny,stagData.nz), stagData.z2_overlap.reshape(stagData.nx,stagData.ny,stagData.nz)
+        # Yin Yang fields
+        vx1, vx2 = stagData.vx1_overlap.reshape(stagData.nx,stagData.ny,stagData.nz), stagData.vx2_overlap.reshape(stagData.nx,stagData.ny,stagData.nz)
+        vy1, vy2 = stagData.vy1_overlap.reshape(stagData.nx,stagData.ny,stagData.nz), stagData.vy2_overlap.reshape(stagData.nx,stagData.ny,stagData.nz)
+        vz1, vz2 = stagData.vz1_overlap.reshape(stagData.nx,stagData.ny,stagData.nz), stagData.vz2_overlap.reshape(stagData.nx,stagData.ny,stagData.nz)
+        # Compute the gradients
+        gxx1,gxy1,gxz1 = np.gradient(vx1)
+        gyx1,gyy1,gyz1 = np.gradient(vy1)
+        gzx1,gzy1,gzz1 = np.gradient(vz1)
+        gxx2,gxy2,gxz2 = np.gradient(vx2)
+        gyx2,gyy2,gyz2 = np.gradient(vy2)
+        gzx2,gzy2,gzz2 = np.gradient(vz2)
+
+        # Horizontal
+        hdiv1 = gxx1 + gyy1
+        hvor1 = gyx1 - gxy1
+        hdiv2 = gxx2 + gyy2
+        hvor2 = gyx2 - gxy2
+        # Apply redflags
+        """
+        goodIndex = np.ones(len(x1.flatten()),dtype=bool)
+        goodIndex[np.array(stagData.redFlags)] = False
+        hdiv1 = hdiv1.flatten()[goodIndex]
+        hdiv2 = hdiv2.flatten()[goodIndex]
+        hvor1 = hvor1.flatten()[goodIndex]
+        hvor2 = hvor2.flatten()[goodIndex]
+        """
+        if new:
+            stagData.v1 = hdiv1
+            stagData.v2 = hdiv2
+            #stagData.v  = np.stack((hdiv1,hdiv2)).reshape(2*len(stagData.x1))
+            return stagData
+    elif stagData.geometry == 'cart3D':
+        gxx,gxy,gxz = np.gradient(stagData.vx)
+        gyx,gyy,gyz = np.gradient(stagData.vy)
+        gzx,gzy,gzz = np.gradient(stagData.vz)
+        # Horizontal
+        hdiv = gxx + gyy
+        hvor = gyx - gxy
+        # Volumetric
+        div  = gxx + gyy + gzz
+        vor  = np.array([gzy-gyz,gxz-gzx,gyx-gxy])
+        if new:
+            stagData.v = vor
+            return stagData
+    
+
+def divergence_vorticity(u,dx,dy,dz):
+    """
+    """
+    nvtot,nxtot,nytot,nztot,nbtot = np.shape(u)
+    u = u.reshape(nxtot,nytot,nztot,nbtot,nvtot)
+
+    sq=0
+    mn=1
+    mx=2
+    h=0
+    v=1
+
+    vx = 0
+    vy = 1
+    vz = 2
+  
+    g = 2
+    myzc = 1 # ??????
+
+    iz00 = nztot*g%myzc
+    d1x = 1./dx
+    d1y = 1./dy
+  
+    big = 1e10
+
+    vor = np.zeros((3,nztot,2))
+    div = np.zeros((3,nztot)) 
+
+    div[sq,:]   = 0.
+    div[mn,:]   = big
+    div[mx,:]   = -big
+    vor[sq,:,:] = 0.
+    vor[mn,:,:] = big
+    vor[mx,:,:] = -big
+  
+  #               ---- work on local patch of problem
+  #                    ws evaluated at centers of cell edges
+  #                    d  evaluated at cell center
+
+    nz = nztot
+    nx = nxtot
+    ny = nytot
+    nb = nbtot
+
+    izmax = nz-1
+    izmax = nz
+
+    from tqdm import tqdm
+    for iz in tqdm(range(62,izmax)):
+        izg = iz + iz00
+        d1z = 1#1./(dzg(0,iz)+dzg(1,iz-1))
+        drms = 0.0  ;  dmin = big ;  dmax = -big
+        wzrms = 0.0 ; wzmin = big ; wzmax = -big
+        whrms = 0.0 ; whmin = big ; whmax = -big
+        for ib in range(0,nb):
+            for iy in range(0,ny-1):
+                for ix in range(0,nx-1):
+                    wx = d1y*(u[ix,iy,iz,ib,vz]-u[ix,iy-1,iz,ib,vz])\
+                        - d1z*(u[ix,iy,iz,ib,vy]-u[ix,iy,iz-1,ib,vy])
+                    wy = d1x*(u[ix,iy,iz,ib,vz]-u[ix-1,iy,iz,ib,vz])\
+                        - d1z*(u[ix,iy,iz,ib,vx]-u[ix,iy,iz-1,ib,vx])
+                    wh = np.sqrt(wx**2+wy**2)
+                    wz = d1x*(u[ix,iy,iz,ib,vy]-u[ix-1,iy,iz,ib,vy])\
+                        - d1y*(u[ix,iy,iz,ib,vx]-u[ix,iy-1,iz,ib,vx])
+                    d  = d1x*(u[ix+1,iy,iz,ib,vx]-u[ix,iy,iz,ib,vx])\
+                        + d1y*(u[ix,iy+1,iz,ib,vy]-u[ix,iy,iz,ib,vy])
+                    wzrms = wzrms + wz**2 #* dareag(ix,iy)
+                    wzmin = np.min([wzmin, wz])
+                    wzmax = np.max([wzmax, wz])
+                    whrms = whrms + wh**2 #* dareag(ix,iy)
+                    whmin = np.min([whmin, wh])
+                    whmax = np.max([whmax, wh])
+                    drms = drms + d**2 #*dareag(ix,iy)
+                    dmin = np.min([dmin, d])
+                    dmax = np.max([dmax, d])
+
+        vor[sq,izg,h] = whrms
+        vor[mn,izg,h] = whmin
+        vor[mx,izg,h] = whmax
+        vor[sq,izg,v] = wzrms
+        vor[mn,izg,v] = wzmin
+        vor[mx,izg,v] = wzmax
+        div[sq,izg] = drms
+        div[mn,izg] = dmin
+        div[mx,izg] = dmax
+    return div,vor
+
+
+
+
+def compute_seafloor_age(stagDataT,isoth=1.2):
+    """
+    return a pypStag.stagData.StagYinYangGeometry object
+    """
 
 
 

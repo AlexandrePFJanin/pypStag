@@ -10,7 +10,7 @@ Created on Wed Jan 30 16:46:12 2019
 
 
 class PypStagError(Exception):
-    """ Main class for all pypStag """
+    """ Main class for all pypStag errors"""
     pass
 
 
@@ -68,12 +68,27 @@ class CloudBuildIndexError(PypStagError):
              "You have to set an 'indices' list or set a begining and end index and a file step.")
 
 
+class StagBaseError(PypStagError):
+    """ Errors from uncoherent base"""
+    def __init__(self,msg):
+        super().__init__("Error in the base!\n"+msg)
+
+
 class GridGeometryInDevError(PypStagError):
     """Raised when stagData.import have an unconform input geometry"""
     def __init__(self,geom):
         super().__init__('Error on the input geometry !\n'+\
              "The input geometry '"+geom+"' is not suported now\n"+\
              'in the current version of pypStag... Be patient and take a coffee!')
+
+
+class GridGeometryIncompatibleError(PypStagError):
+    """Raised when you add a new StagData object to a StagBookData but with
+    an incompatible geometry according to the already loaded data."""
+    def __init__(self,igeom,geom):
+        super().__init__('Error on the input geometry !\n'+\
+             "The input geometry '"+igeom+"' is incompatible with\n"+\
+             "the geometry '"+geom+"' of the object(s) already loaded in the StagBookData'")
 
 
 class FieldTypeInDevError(PypStagError):
@@ -113,11 +128,19 @@ class GridInterpolationError(PypStagError):
 
 
 class fieldTypeError(PypStagError):
-    """Raised unexpected field type"""
+    """Raised when unexpected field type"""
     def __init__(self,expectedFieldtype):
         super().__init__('Error on the StagData Field Type\n'+\
             'Unexpected value of StagData.fiedType\n'+\
             'StagData.fieldType must be here: '+expectedFieldtype)
+
+
+class fieldNatureError(PypStagError):
+    """Raised when unexpected field nature"""
+    def __init__(self,expectedFieldNature):
+        super().__init__('Error on the StagData Field Nature\n'+\
+            'Unexpected value of StagData.fiedNature\n'+\
+            'StagData.fieldNature must be here: '+expectedFieldNature)
 
 
 class SliceAxisError(PypStagError):
