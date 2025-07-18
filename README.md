@@ -1,6 +1,6 @@
 <p align="center">
-    <img src="./icons/pypStag-logo_light-BG#gh-light-mode-only" height="150" width="419"/>
-    <img src="./icons/pypStag-logo_dark-BG#gh-dark-mode-only" height="150" width="150"/>
+    <img src="./icons/pypStag-logo_light-BG.png#gh-light-mode-only" height="150" width="419"/>
+    <img src="./icons/pypStag-logo_dark-BG.png#gh-dark-mode-only" height="150" width="419"/>
 </p>
 
 # pypStag
