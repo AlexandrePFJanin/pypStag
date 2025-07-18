@@ -597,7 +597,7 @@ class StagCartesianGeometry(MainStagObject):
             layers[:,:,i] = i+1
         return layers
 
-    def stagProcessing(self,deallocate='all', reorganize=True):
+    def stagProcess(self,deallocate='all', reorganize=True):
         """
         This function processes the raw stag data read with the function
         pypStag.stagData.stagImport for a Cartesian geometry.
@@ -784,7 +784,7 @@ class StagYinYangGeometry(MainStagObject):
         return -self.vtheta
 
 
-    def stagProcessing(self, deallocate='all', build_overlapping_field=False):
+    def stagProcess(self, deallocate='all', build_overlapping_field=False):
         """
         This function processes the raw stag data read with the function
         pypStag.stagData.stagImport for a Yin-Yang geometry.
@@ -1437,7 +1437,7 @@ class StagSphericalGeometry(MainStagObject):
         return layers
     
     
-    def stagProcessing(self, deallocate='all',reorganize=True):
+    def stagProcess(self, deallocate='all', reorganize=True):
         """
         This function processes the raw stag data read with the function
         pypStag.stagData.stagImport for a Spherical geometry.
