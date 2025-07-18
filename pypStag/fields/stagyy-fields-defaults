@@ -1,0 +1,25 @@
+t    -> Temperature
+eta  -> Viscosity
+vp   -> Velocity-Pressure -> +
+div  -> Divergence
+vor  -> Vorticity
+str  -> Stress
+ed   -> Strain Rate
+po   -> Poloidal
+to   -> Toroidal
+c    -> Composition
+cs   -> Topography
+rho  -> Density
+f    -> Melt Fraction
+vm   -> Melt Velocity
+age  -> Age
+nrc  -> Continent Init ID
+prot -> Continent Proterozoic
+prm  -> Continent Archean
+defm -> Deformation Mode
+gs   -> Grain Size
+dam  -> Damage
+
+
+
+

@@ -2,20 +2,21 @@ from setuptools import setup
 
 setup(
    name='pypStag',
-   version='0.7.0',
+   version='1.0.0',
    author='Alexandre JANIN',
    author_email='alexandre.janin@protonmail.com',
-   packages=['pypStag'],
    url='https://github.com/AlexandrePFJanin/pypStag',
-   license='LICENSE.txt',
-   description='pypStag is a python package for managing StagYY outputs. This package offers you an efficient solution for basic reading/processing operations and is associated with a complete visualization package for 2D and 3D representation of your StagYY data.',
-   long_description=open('README.rst').read(),
+   packages=['pypStag'],
+   data_files=[('pypStag', ['pypStag/fields/stagyy-fields-defaults', 'pypStag/fields/stagyy-fields-local'])],     # to include data samples
+   include_package_data=True,   # to include data samples
+   license='LICENSE.md',
+   description='A python package for post-processing and analysing StagYY outputs.',
+   long_description=open('README.md').read(),
    install_requires=[
+        'ipython>=8.15.0',
         'numpy>=1.12',
-        'scipy>=1.0',
-        'h5py>=2.7.1',
-        'matplotlib>=3.0',
-	'Cartopy>=0.18',
-	'scipy>=1.5.2'
+	    'scipy>=1.5.2',
+	    'h5py>=3.9.0',
+	    'termcolor'
    ],
 )
