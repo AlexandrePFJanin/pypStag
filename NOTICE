@@ -1,5 +1,14 @@
-pypStag
-Copyright 2025 Alexandre P. F. Janin
+pypStag - A python package for post-processing and analysing StagYY outputs.
 
-This product was exclusively developped by
-Alexandre Janin (https://github.com/AlexandrePFJanin)
+Copyright 2025 Alexandre JANIN
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+---
+
+Contributors:
+- Alexandre JANIN (Lead developer and maintainer)
