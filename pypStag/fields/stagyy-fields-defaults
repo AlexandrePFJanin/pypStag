@@ -1,25 +1,35 @@
-t    -> Temperature
-eta  -> Viscosity
-vp   -> Velocity-Pressure -> +
-div  -> Divergence
-vor  -> Vorticity
-str  -> Stress
-ed   -> Strain Rate
-po   -> Poloidal
-to   -> Toroidal
-c    -> Composition
-cs   -> Topography
-rho  -> Density
-f    -> Melt Fraction
-vm   -> Melt Velocity
-age  -> Age
-nrc  -> Continent Init ID
-prot -> Continent Proterozoic
-prm  -> Continent Archean
-defm -> Deformation Mode
-gs   -> Grain Size
-dam  -> Damage
-
-
-
-
+age   -> Age
+arch  -> Archean
+bs    -> Basalt
+c     -> Composition
+cc    -> ccrust
+cr    -> Crustal thickness
+cs    -> Topography
+csg   -> Topography self-gravity
+dam   -> Damage
+defm  -> Deformation Mode
+disl  -> Dislocation
+div   -> Divergence
+ed    -> Strain Rate
+eta   -> Viscosity
+f     -> Melt Fraction
+g     -> Geoid
+gs    -> Grain Size
+imp   -> Impactor
+k     -> Conductivity
+mtl   -> Metal
+nrc   -> Continent Init ID
+plast -> Plasticity
+po    -> Poloidal
+prm   -> Continent Archean
+prot  -> Continent Proterozoic
+rho   -> Density
+str   -> Stress
+t     -> Temperature
+to    -> Toroidal
+tpc   -> Tracers per cell
+vm    -> Melt Velocity
+vor   -> Vorticity
+vp    -> Velocity-Pressure -> +
+Wsol  -> Water Solubility
+wtr   -> Water
