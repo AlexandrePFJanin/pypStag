@@ -125,6 +125,9 @@ class Mesh():
             self.phi   = None   # longitude (radians)
             if dimension > 2:
                 self.theta = None   # colatitude (radians)
+        # --- Depth
+        self.depths  = []       # matrix of depths in real Earth for each layers
+        self.rcmb = 0           # radius of the Core-Mantle Boundary (i.e. the deepest point of the mesh)
         # --- Status
         self.hiddenStatus = hiddenStatus
         if not hiddenStatus:
@@ -139,7 +142,6 @@ class Mesh():
     def lat(self):
         """Returns latitudes in degrees N"""
         return 90-self.theta*180/np.pi
-
 
     @property
     def pointID(self):
@@ -186,6 +188,47 @@ class Mesh():
         # status change
         if not self.hiddenStatus:
             self.allocated = False
+    
+    def scaleGrid(self, k):
+        """
+        A function that scales the grid (i.e. multiplies each component)
+        by a scalar k.
+
+        Scales:
+                - the main cartesian grid according to the mesh's geometry and dimension (x,y,z)
+                - the radial coordinates if spherical mesh (r)
+                - rcmb, to keep track of the real rcmb value
+        Does not scale:
+                x the values of depths (depends on the input planetary model, not much on the scaling of the grid)
+                x the surface spherical grid coordinates (tetha and phi): not affected. 
+
+        Args:
+            k (int/float): Multiplication factor applied to the grid.
+        """
+        if np.isscalar(k):
+            if isinstance(self.x, np.ndarray):
+                self.x *= k
+            else:
+                raise AttributeError('scaleGrid expect x to be a numpy.ndarray')
+            if self.dimension > 1:
+                if isinstance(self.y, np.ndarray):
+                    self.y *= k
+                else:
+                    raise AttributeError('scaleGrid expect y to be a numpy.ndarray')
+            if self.dimension > 2:
+                if isinstance(self.z, np.ndarray):
+                    self.z *= k
+                else:
+                    raise AttributeError('scaleGrid expect z to be a numpy.ndarray')
+            if self.spherical:
+                # only r, theta and phi remain unchanged
+                if isinstance(self.r, np.ndarray):
+                    self.r *= k
+                else:
+                    raise AttributeError('scaleGrid expect r to be a numpy.ndarray')
+            self.rcmb   *= k
+        else:
+            raise AttributeError('scaleGrid expect k to be a scalar')
 
     
 
@@ -259,10 +302,34 @@ class PartialYinYang(Mesh):
             self.vtheta = None
             self.vphi = None
         if self.pressure:
-            self.P
+            self.P = None
         # status change
         self.allocated = False
-        return 
+    
+    def scaleFields(self, k, P=None):
+        """
+        A function that scales the fields (i.e. multiplies each component)
+        loaded in the current instance by a scalar k. When a pressure field
+        is loaded, a special argument 'P', allows to give it a different
+        scaling factor.
+
+        Args:
+            k (int/float): Multiplication factor applied to the fields.
+        """
+        if np.isscalar(k):
+            self.v *= k
+            if not self.scalar:
+                self.vx *= k
+                self.vy *= k
+                self.vz *= k
+                self.vtheta *= k
+                self.vphi   *= k
+                self.vr *= k
+            if self.pressure and P is not None:
+                self.P  *= P
+        else:
+            raise AttributeError('scaleFields expect k to be a scalar')
+
         
 
 
@@ -300,9 +367,7 @@ class MainStagObject(Mesh):
         self.aspect = []                # aspect ratio of the mesh set in stagyy
         self.bot_temp = 1.0             # bottom temperature imposed in stagyy
         # Depth
-        self.slayers = []               # matrix of selected layers (same size as self.raw.z_coord)
-        self.depths = []                # matrix of depths in real Earth for each layers
-        self.rcmb = 0                   # radius of the Core-Mantle Boundary (i.e. the deepest point of the mesh)
+        self.slayers = []       # matrix of selected layers (same size as self.raw.z_coord)
         # Time
         self.time = 0                   # dimensionless age of the simulation
         self.timestep = 0               # real time step of the stag simualtion
@@ -313,13 +378,13 @@ class MainStagObject(Mesh):
 
 
 
-    def im(self,textMessage,error=False,end=False):
+    def im(self,textMessage,error=False,warn=False,end=False):
         """Verbose output for internal messages."""
-        im(textMessage,self.pName,self.verbose,error=error,structure=self.verbose_structure,end=end)
+        im(textMessage,self.pName,self.verbose,error=error,warn=warn,structure=self.verbose_structure,end=end)
 
 
 
-    def stagImport(self, directory, fname, beginIndex=-1, endIndex=-1, surface=False, resampling=[1,1,1], f_fieldName=f_split_fname_default,f_param=(5)):
+    def stagImport(self, directory, fname, beginIndex=-1, endIndex=-1, surface=False, resampling=[1,1,1], f_fieldName=f_split_fname_default, f_param=(5)):
         """
         Reads a stag binary data file using the module pypStag.io.fields
         and fill the current data structure.
@@ -480,7 +545,8 @@ class MainStagObject(Mesh):
         
         #Compute depths according to the input planetary model:
         width_mantle = self.planetaryModel.mantle_bottom_depth - self.planetaryModel.mantle_up_depth
-        self.depths = [(1-self.raw.z_coords[i])*width_mantle+self.planetaryModel.mantle_up_depth for i in range(self.nz)]
+        D_adim = self.raw.header.get('rgeom')[-1][0] - self.raw.header.get('rgeom')[0][0] # real thickness of the mantle domain that StagYY used
+        self.depths = [(1-self.raw.z_coords[i]/D_adim)*width_mantle+self.planetaryModel.mantle_up_depth for i in range(self.nz)]
         self.depths = np.array(sorted(self.depths,reverse=True)) #sorted as self.raw.z_coord
         
         #Find the fieldName:
@@ -739,6 +805,28 @@ class StagCartesianGeometry(MainStagObject):
         # == Processing Finish !
         self.im('Processing of stag data done!',end=True)
     
+
+    def scaleFields(self, k, P=None):
+        """
+        A function that scales the fields (i.e. multiplies each component)
+        loaded in the current instance by a scalar k. When a pressure field
+        is loaded, a special argument 'P', allows to give it a different
+        scaling factor.
+
+        Args:
+            k (int/float): Multiplication factor applied to the fields.
+        """
+        if np.isscalar(k):
+            self.v *= k
+            if not self.scalar:
+                self.vx *= k
+                self.vy *= k
+                self.vz *= k
+            if self.pressure and P is not None:
+                self.P  *= P
+        else:
+            raise AttributeError('scaleFields expect k to be a scalar')
+    
     
 
 
@@ -801,7 +889,23 @@ class StagYinYangGeometry(MainStagObject):
                             construction of fields for the overlapping mesh.
                             Defaults, set to False
         """
+        self.im('Updating dynamic structures')
+        self.overlap  = OverlapMesh(scalar=self.scalar, pressure=self.pressure)
+        self.yin  = PartialYinYang('yin',  scalar=self.scalar, pressure=self.pressure)
+        self.yang = PartialYinYang('yang', scalar=self.scalar, pressure=self.pressure)
         self.im('Processing stag Data:')
+        # transfer main Mesh data (depths and rcmb) to linked structures (Mesh of lower structures)
+        self.unbended.rcmb       = self.rcmb
+        self.unbended.depths     = self.depths
+        self.overlap.yin.rcmb    = self.rcmb
+        self.overlap.yin.depths  = self.depths
+        self.overlap.yang.rcmb   = self.rcmb
+        self.overlap.yang.depths = self.depths
+        self.yin.rcmb            = self.rcmb
+        self.yin.depths          = self.depths
+        self.yang.rcmb           = self.rcmb
+        self.yang.depths         = self.depths
+
         self.im('  - Grid Geometry')
         self.im('      - Yin-Yang grid geometry')
         self.im('      - Pre-processing of coordinates matrices')
@@ -926,13 +1030,34 @@ class StagYinYangGeometry(MainStagObject):
                 gc.collect()
             if build_overlapping_field:
                 self.im('         - Overlapping field requested')
-                #Re-sampling
+                #Cartesian Velocities
                 self.overlap.yin.vx  = VX1[goodIndex_4overlap]
                 self.overlap.yang.vx = VX2[goodIndex_4overlap]
                 self.overlap.yin.vy  = VY1[goodIndex_4overlap]
                 self.overlap.yang.vy = VY2[goodIndex_4overlap]
                 self.overlap.yin.vz  = VZ1[goodIndex_4overlap]
                 self.overlap.yang.vz = VZ2[goodIndex_4overlap]
+                #Norm
+                self.overlap.yin.v   = np.sqrt(self.overlap.yin.vx**2 + self.overlap.yin.vy**2 + self.overlap.yin.vz**2)
+                self.overlap.yang.v  = np.sqrt(self.overlap.yang.vx**2 + self.overlap.yang.vy**2 + self.overlap.yang.vz**2)
+                #Spherical
+                self.overlap.yin.vr  = vr1[goodIndex_4overlap]
+                self.overlap.yang.vr = vr2[goodIndex_4overlap]
+            
+                lat1 = np.arctan2(np.sqrt(self.overlap.yin.x**2+self.overlap.yin.y**2),self.overlap.yin.z)
+                lon1 = np.arctan2(self.overlap.yin.y,self.overlap.yin.x)
+                lat2 = np.arctan2(np.sqrt(self.overlap.yang.x**2+self.overlap.yang.y**2),self.overlap.yang.z)
+                lon2 = np.arctan2(self.overlap.yang.y,self.overlap.yang.x)
+                
+                Vlat1 =  self.overlap.yin.vx*(np.cos(lon1)*np.cos(lat1))  + self.overlap.yin.vy*(np.sin(lon1)*np.cos(lat1))  - self.overlap.yin.vz*(np.sin(lat1))
+                Vlon1 = -self.overlap.yin.vx*(np.sin(lon1))               + self.overlap.yin.vy*(np.cos(lon1))
+                Vlat2 =  self.overlap.yang.vx*(np.cos(lon2)*np.cos(lat2)) + self.overlap.yang.vy*(np.sin(lon2)*np.cos(lat2)) - self.overlap.yang.vz*(np.sin(lat2))
+                Vlon2 = -self.overlap.yang.vx*(np.sin(lon2))              + self.overlap.yang.vy*(np.cos(lon2))
+
+                self.overlap.yin.vtheta  = Vlat1
+                self.overlap.yang.vtheta = Vlat2
+                self.overlap.yin.vphi    = Vlon1
+                self.overlap.yang.vphi   = Vlon2
 
             #Apply redFlags on goodindex:
             self.yin.vx  = VX1[goodIndex]
@@ -987,7 +1112,6 @@ class StagYinYangGeometry(MainStagObject):
             if self.pressure:
                 self.yin.P   = P1[goodIndex]
                 self.yang.P  = P2[goodIndex]
-
         # Stitch Yin and Yang
         self.im('  - Stitch Yin and Yang together')
         self.im('     - Stack the grids')
@@ -1001,7 +1125,6 @@ class StagYinYangGeometry(MainStagObject):
         self.overlap.yang.allocated = True
         self.yin.allocated  = True
         self.yang.allocated = True
-        
         #Deallocate the memory from raw data
         if deallocate not in ('no','none','min','all','all+'):
             raise ValueError()
@@ -1026,6 +1149,128 @@ class StagYinYangGeometry(MainStagObject):
         # == Processing Finish !
         self.im('Processing of stag data done!')
     
+
+    def scaleGrid(self, k, which='main+'):
+        """
+        A function that scales the grid (i.e. multiplies each component)
+        by a scalar k.
+        The optional argument 'which', allows you to easily control the
+        scaling of the linked grids (e.g. yin, yang, overlap...).
+
+        Function inhereted from pypStag.stagData.Mesh().scaleGrid()
+
+        Args:
+            k (int/float): Multiplication factor applied to the grid.
+            which (str): Control to scaling of linked grids.
+
+                    which = 'main': scales only the main grid.
+                    which = 'main+' (defaults): scales the main grid and the
+                            yin and yang grids (recommanded).
+                    which = 'main++': scales the main grid + the yin and yang
+                            grids and the overlapping grids.
+                    which = 'all': same as 'main++' + scales the unbended grids.
+
+                    NOTE: This function ignores deallocated meshes.
+                          If you've deallocated the overlapping grid and you
+                          ask which='main++' for instance, this function will
+                          ignore *WITH WARNINGS* the overlapping meshes
+        """
+        if which not in ['main','main+','main++','all']:
+            raise AttributeError("Unknown value for the input argument 'which'.")
+        else:
+            self.im('Scale the grid.')
+            self.im('  -> which? '+which)
+        # call the scaleGrid function from Mesh
+        super().scaleGrid(k)
+        if which == 'main+' or which == 'main++' or which == 'all':
+            if self.yin.allocated:
+                self.yin.scaleGrid(k)
+            else:
+                self.im('WARNING: yin is deallocated',warn=True)
+            if self.yang.allocated:
+                self.yang.scaleGrid(k)
+            else:
+                self.im('WARNING: yang is deallocated',warn=True)
+        if which == 'main++' or which == 'all':
+            if self.overlap.yin.allocated:
+                self.overlap.yin.scaleGrid(k)
+            else:
+                self.im('WARNING: overlap.yin is deallocated',warn=True)
+            if self.overlap.yang.allocated:
+                self.overlap.yang.scaleGrid(k)
+            else:
+                self.im('WARNING: overlap.yang is deallocated',warn=True)
+        if which == 'all':
+            if self.unbended.allocated:
+                self.unbended.scaleGrid(k)
+            else:
+                self.im('WARNING: unbended is deallocated',warn=True)
+            if self.unbended.allocated:
+                self.unbended.scaleGrid(k)
+            else:
+                self.im('WARNING: unbended is deallocated',warn=True)
+    
+
+    def scaleFields(self, k, P=None, which='main+'):
+        """
+        A function that scales the fields (i.e. multiplies each component)
+        loaded in the current instance by a scalar k. When a pressure field
+        is loaded, a special argument 'P', allows to give it a different
+        scaling factor.
+        The optional argument 'which', allows you to easily control the
+        scaling of the linked fields (e.g. yin, yang, overlap...).
+
+        Args:
+            k (int/float): Multiplication factor applied to the fields.
+            which (str): Control to scaling of linked fields.
+
+                    which = 'main': scales only the fields of the main structure.
+                    which = 'main+' (defaults): scales the fields of the main structure
+                            and those of the yin and yang grids (recommanded).
+                    which = 'main++': scales the fields of the main structure
+                            + those of the the yin and yang grids and those of
+                            the overlapping grids.
+                    which = 'all': same as 'main++'
+
+                    NOTE: This function ignores deallocated meshes.
+                          If you've deallocated the overlapping structure and you
+                          ask which='main++' for instance, this function will
+                          ignore *WITH WARNINGS* the overlapping meshes structures.
+        """
+        if np.isscalar(k):
+            # Scales main:
+            self.v *= k
+            if not self.scalar:
+                self.vx *= k
+                self.vy *= k
+                self.vz *= k
+                self.vtheta *= k
+                self.vphi   *= k
+                self.vr *= k
+            if self.pressure and P is not None:
+                self.P  *= P
+            # Scales others:
+            if which == 'main+' or which == 'main++' or which == 'all':
+                if self.yin.allocated:
+                    self.yin.scaleFields(k, P=P)
+                else:
+                    self.im('WARNING: yin is deallocated',warn=True)
+                if self.yang.allocated:
+                    self.yang.scaleFields(k, P=P)
+                else:
+                    self.im('WARNING: yang is deallocated',warn=True)
+            if which == 'main++' or which == 'all':
+                if self.overlap.yin.allocated:
+                    self.overlap.yin.scaleFields(k, P=P)
+                else:
+                    self.im('WARNING: overlap.yin is deallocated',warn=True)
+                if self.overlap.yang.allocated:
+                    self.overlap.yang.scaleFields(k, P=P)
+                else:
+                    self.im('WARNING: overlap.yang is deallocated',warn=True)
+        else:
+            raise AttributeError('scaleFields expect k to be a scalar')
+
     
     def splitGrid(self):
         """ This function split the loaded grid (x->x1+x2,
@@ -1437,7 +1682,7 @@ class StagSphericalGeometry(MainStagObject):
         return layers
     
     
-    def stagProcess(self, deallocate='all', reorganize=True):
+    def stagProcess(self, deallocate='min', reorganize=True):
         """
         This function processes the raw stag data read with the function
         pypStag.stagData.stagImport for a Spherical geometry.
@@ -1459,6 +1704,10 @@ class StagSphericalGeometry(MainStagObject):
                             NOTE: Does not affect spherical 3D objects.
         """
         self.im('Processing stag Data:')
+        # transfer main Mesh data (depths and rcmb) to linked structures (Mesh of lower structures)
+        self.cartesian.rcmb     = self.rcmb
+        self.cartesian.depths   = self.depths
+
         self.im('  - Grid Geometry')
         # Meshing
         (self.cartesian.x,self.cartesian.y,self.cartesian.z) = np.meshgrid(self.raw.x_coords,self.raw.y_coords,self.raw.z_coords,indexing='ij')
@@ -1623,6 +1872,69 @@ class StagSphericalGeometry(MainStagObject):
                     self.cartesian.deallocate()
         # == Processing Finish !
         self.im('Processing of stag data done!')
+    
+
+    def scaleGrid(self, k, which='main+'):
+        """
+        A function that scales the grid (i.e. multiplies each component)
+        by a scalar k.
+        The optional argument 'which', allows you to easily control the
+        scaling of the linked grids (e.g. yin, yang, overlap...).
+
+        Function inhereted from pypStag.stagData.Mesh().scaleGrid()
+
+        Args:
+            k (int/float): Multiplication factor applied to the grid.
+            which (str): Control to scaling of linked grids.
+
+                    which = 'main': scales only the main ('bended') grid.
+                    which = 'main+' (defaults): scales the main grid and the
+                            cartesian (unbended) one (recommanded).
+                    which = 'all': same as 'main+'
+
+                    NOTE: This function ignores deallocated meshes.
+                          If you've deallocated the cartesian grid and you
+                          ask which='main+' for instance, this function will
+                          ignore *WITH WARNINGS* the cartesian mesh.
+        """
+        if which not in ['main','main+','all']:
+            raise AttributeError("Unknown value for the input argument 'which'.")
+        else:
+            self.im('Scale the grid.')
+            self.im('  -> which? '+which)
+        # call the scaleGrid function from Mesh
+        super().scaleGrid(k)
+        if which == 'main+' or which == 'all':
+            if self.cartesian.allocated:
+                self.cartesian.scaleGrid(k)
+            else:
+                self.im('WARNING: cartesian is deallocated',warn=True)
+    
+
+    def scaleFields(self, k, P=None):
+        """
+        A function that scales the fields (i.e. multiplies each component)
+        loaded in the current instance by a scalar k. When a pressure field
+        is loaded, a special argument 'P', allows to give it a different
+        scaling factor.
+
+        Args:
+            k (int/float): Multiplication factor applied to the fields.
+        """
+        if np.isscalar(k):
+            self.v *= k
+            if not self.scalar:
+                self.vx *= k
+                self.vy *= k
+                self.vz *= k
+                self.vtheta *= k
+                self.vphi   *= k
+                self.vr *= k
+            if self.pressure and P is not None:
+                self.P  *= P
+        else:
+            raise AttributeError('scaleFields expect k to be a scalar')
+
 
 
 

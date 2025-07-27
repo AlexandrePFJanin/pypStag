@@ -12,7 +12,7 @@ from termcolor import colored
 # ----------------- FUNCTIONS -----------------
 
 
-def im(textMessage,pName,verbose,error=False,structure=True,end=True):
+def im(textMessage,pName,verbose,error=False,warn=False,structure=True,end=True):
     """Print verbose internal message. This function depends on the
     argument verbose. If verbose, then the message will be displayed
     in the terminal.
@@ -23,13 +23,17 @@ def im(textMessage,pName,verbose,error=False,structure=True,end=True):
         verbose = bool, condition for the verbose output
     """
     if verbose and not error:
+        if not warn:
+            msgc = None
+        else:
+            msgc = 'yellow'
         if structure:
             if end:
-                print(colored('>> '+pName+'| ','blue')+colored('--- ','magenta')+textMessage)
+                print(colored('>> '+pName+'| ','blue')+colored('--- ','magenta')+colored(textMessage, msgc))
             else:
-                print(colored('>> '+pName+'| ','blue')+colored(' : ','magenta')+textMessage)
+                print(colored('>> '+pName+'| ','blue')+colored(' : ','magenta')+colored(textMessage, msgc))
         else:
-            print(colored('>> '+pName+'| ','blue')+textMessage)
+            print(colored('>> '+pName+'| ','blue')+colored(textMessage, msgc))
     if error:
         #print error message
         print(colored('>> '+pName+'| --- ----- ---','red'))
