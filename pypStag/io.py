@@ -214,7 +214,8 @@ def fields(fieldfile):
             )
         if hdr.sfield:
             # for surface fields, variables are written along z direction
-            flds = np.swapaxes(flds, 0, 3)
+            pass
+            #flds = np.swapaxes(flds, 0, 3) # Changed A.JANIN 2026.03.24
     return header, flds
 
 
